@@ -1,13 +1,18 @@
-[BASIC]
-argument-naming-style=snake_case
-# good-names=
+[MASTER]
+ignore=.venv
+jobs=0
 
 [MESSAGES CONTROL]
-disable = missing-function-docstring,
-        missing-module-docstring,
-        missing-class-docstring,
-        import-outside-toplevel,
-        attribute-defined-outside-init,
-        line-too-long,
-        invalid-str-returned,
-        no-member
+disable=
+    C0114,  # missing-module-docstring
+    C0115,  # missing-class-docstring
+    C0116,  # missing-function-docstring
+    R0903,  # too-few-public-methods (часто мешает в dataclass/Qt)
+    R0913,  # too-many-arguments
+    W0703   # broad-exception-caught (в GUI иногда допустимо)
+
+[FORMAT]
+max-line-length=88
+
+[DESIGN]
+max-attributes=12
