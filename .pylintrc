@@ -1,6 +1,7 @@
 [MASTER]
 ignore=.venv
 jobs=0
+extension-pkg-allow-list=PySide6
 
 [MESSAGES CONTROL]
 disable=
