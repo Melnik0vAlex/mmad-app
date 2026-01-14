@@ -18,19 +18,22 @@ class StageRecord:
     ----------
     stage_name:
         Название ступени (например, Stage 0..7, Filter).
-    d50_um:
-        Cut-point (D50) в мкм для данной ступени при заданном расходе.
+    d_high:
+        Верхний размер частиц (мкм).
+    d_low:
+        Нижний размер частиц - Cut-point (мкм) для данной ступени при заданном расходе.
     mass_ug:
         Масса (мкг), осаждённая на данной ступени.
     """
-    stage_name: str
-    d50_um: float
-    mass_ug: float
+    name: str
+    d_high: float
+    d_low: float
+    mass: float
 
 
 @dataclass(frozen=True)
 class MmadResult:
-    """Результат расчёта MMAD/GSD + дополнительные метрики APSD."""
+    """Результат расчёта MMAD и дополнительные метрики APSD."""
 
     mmad_um: float
     gsd: float
@@ -48,3 +51,11 @@ class MmadResult:
 
     diam_um: np.ndarray
     cum_undersize_pct: np.ndarray
+
+@dataclass(frozen=True)
+class ProbitFitResult:
+    """Параметры пробит-регрессии."""
+
+    a: float
+    b: float
+    r2: float

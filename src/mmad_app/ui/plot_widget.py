@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from matplotlib.ticker import AutoMinorLocator, LogLocator, MultipleLocator
+from matplotlib.ticker import AutoMinorLocator, MaxNLocator, MultipleLocator
 
 
 class PlotWidget(QWidget):
@@ -43,11 +43,18 @@ class PlotWidget(QWidget):
         # add_subplot(111) - создание оси на фигуре
         # 111 читается как: 1 строка, 1 колонка, 1-й график.
         ax = self._figure.add_subplot(111)
-        ax.set_xlabel("Аэродинамический диаметр, µm (лог шкала)")
-        ax.set_ylabel("Накопительная фракция < размера, %")
-        ax.set_xscale("log")
+        ax.set_xlabel("dв, мкм")
+        ax.set_ylabel("Накопительная масса < dв, %")
+
         ax.set_ylim(0, 100)
-        ax.grid(True, which="both")
+        ax.set_xlim(0, 10)
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=6))
+        ax.xaxis.set_minor_locator(AutoMinorLocator(2))
+        ax.yaxis.set_major_locator(MultipleLocator(10))
+        ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+
+        ax.grid(True, which="major", linestyle="-", linewidth=0.8, alpha=0.6)
+        ax.grid(True, which="minor", linestyle=":", linewidth=0.6, alpha=0.5)
         # Важно: matplotlib не рисует автоматически.
         # draw() говорит: "перерисуй canvas".
         self._canvas.draw()
@@ -56,20 +63,9 @@ class PlotWidget(QWidget):
         self,
         diam_um: np.ndarray,
         cum_pct: np.ndarray,
-        mmad_um: float,
-        d15_87_um: float | None = None,
-        d84_13_um: float | None = None,
-        gsd: float | None = None,
+        mmad_um: float
     ) -> None:
-        """
-        Научная визуализация кумулятивной кривой undersize.
 
-        Рисуем:
-        - кумулятивную кривую
-        - горизонтальные линии уровней 15.87%, 50%, 84.13%
-        - вертикальные линии d15.87, MMAD, d84.13
-        - аккуратные major/minor ticks и сетку
-        """
         self._figure.clear()
         ax = self._figure.add_subplot(111)
 
@@ -79,7 +75,11 @@ class PlotWidget(QWidget):
         ax.plot(
             diam_um,
             cum_pct,
-            marker="o",
+            marker="s",
+            markersize=6,               # размер маркера
+            markerfacecolor="orange",   # заливка маркера
+            markeredgecolor="black",    # обводка маркера
+            markeredgewidth=0.8,
             linewidth=1.6,
             label="Cumulative undersize"
         )
@@ -87,20 +87,18 @@ class PlotWidget(QWidget):
         # ---------------------------
         # 2) Оси и пределы
         # ---------------------------
-        ax.set_xscale("log")
         ax.set_ylim(0, 100)
+        ax.set_xlim(0, 10)
 
         # X-лимиты: берём только положительные диаметры
         x_pos = diam_um[diam_um > 0.0]
-        if x_pos.size >= 2:
-            x_min = float(np.min(x_pos))
-            x_max = float(np.max(x_pos))
-            # небольшие поля по краям, чтобы подписи не упирались
-            ax.set_xlim(x_min * 0.8, x_max * 1.2)
-
-        ax.set_xlabel("Аэродинамический диаметр, µm (лог шкала)")
-        ax.set_ylabel("Накопительная фракция < размера, %")
-        ax.set_title("Аэродинамическое распределение по массе (APSD): cumulative undersize")
+        if x_pos.size > 0:
+            d_top = float(np.max(x_pos))
+            stage_ticks = np.sort(np.unique(x_pos[x_pos < d_top]))
+            if stage_ticks.size > 0:
+                ax.set_xlabel("Аэродинамический диаметр, мкм")
+                ax.set_ylabel("Накопительная масса < dв, %")
+                ax.set_title("Распределение накопленной массы аэрозольных частиц по размерам")
 
         # ---------------------------
         # 3) Красивые деления (ticks)
@@ -109,10 +107,8 @@ class PlotWidget(QWidget):
         ax.yaxis.set_major_locator(MultipleLocator(10))
         ax.yaxis.set_minor_locator(AutoMinorLocator(2))
 
-        # X: лог-деления
-        ax.xaxis.set_major_locator(LogLocator(base=10.0))
-        minor_subs = (np.arange(2, 10) * 0.1).tolist()
-        ax.xaxis.set_minor_locator(LogLocator(base=10.0, subs=minor_subs))
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=6))
+        ax.xaxis.set_minor_locator(AutoMinorLocator(2))
 
         # ---------------------------
         # 4) Сетка: major + minor
@@ -123,31 +119,14 @@ class PlotWidget(QWidget):
         # ---------------------------
         # 5) Процентильные уровни (горизонтальные линии)
         # ---------------------------
-        perc_levels = [15.87, 50.0, 84.13]
+        perc_levels = [16, 50.0, 84]
         for p in perc_levels:
-            ax.axhline(p, linestyle=":", linewidth=1.0)
+            ax.axhline(p, linestyle="--", linewidth=1.2, color="brown")
 
         # ---------------------------
-        # 6) Вертикальные линии: d15/MMAD/d84 + подписи
+        # 6) Вертикальные линии: d16/MMAD/d84 + подписи
         # ---------------------------
-        ax.axvline(mmad_um, linestyle="--", linewidth=1.4, label=f"MMAD = {mmad_um:.3f} µm")
-
-        if d15_87_um is not None:
-            ax.axvline(d15_87_um, linestyle=":", linewidth=1.2, label=f"d15.87 = {d15_87_um:.3f} µm")
-
-        if d84_13_um is not None:
-            ax.axvline(d84_13_um, linestyle=":", linewidth=1.2, label=f"d84.13 = {d84_13_um:.3f} µm")
-
-        # Текстовая аннотация GSD (если есть)
-        if gsd is not None:
-            ax.text(
-                0.02,
-                0.02,
-                f"GSD = {gsd:.3f}",
-                transform=ax.transAxes,  # координаты внутри области графика (0..1)
-                ha="left",
-                va="bottom",
-            )
+        ax.axvline(mmad_um, linestyle="--", linewidth=1.4, color="red", label=f"MMAD = {mmad_um:.2f} мкм")
 
         # ---------------------------
         # 7) Легенда и финальная укладка

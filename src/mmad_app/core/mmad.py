@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable, List, Tuple
 import numpy as np
+from scipy.stats import norm
 
 from mmad_app.core.models import StageRecord, MmadResult
 
@@ -10,10 +11,11 @@ def _validate_records(records: List[StageRecord]) -> None:
     if len(records) < 3:
         raise ValueError("Необходимо минимум 3 заполненные ступени для расчета.")
 
-    d50 = np.array([r.d50_um for r in records], dtype=float)
-    mass = np.array([r.mass_ug for r in records], dtype=float)
+    d_low = np.array([r.d_low for r in records], dtype=float)
 
-    if np.any(~np.isfinite(d50)) or np.any(~np.isfinite(mass)):
+    mass = np.array([r.mass for r in records], dtype=float)
+
+    if np.any(~np.isfinite(d_low)) or np.any(~np.isfinite(mass)):
         raise ValueError("Обнаружены нечисловые (NaN/inf) значения.")
 
     if np.any(mass < 0):
@@ -23,7 +25,7 @@ def _validate_records(records: List[StageRecord]) -> None:
     if total <= 0.0:
         raise ValueError("Суммарная масса должна быть > 0.")
 
-    if np.sum(d50 > 0.0) < 2:
+    if np.sum(d_low > 0.0) < 2:
         raise ValueError("Необходимо минимум 2 положительных D50 (мкм)")
 
 
@@ -32,24 +34,15 @@ def compute_cumulative_undersize(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Строит кумулятивную зависимость cumulative undersize (%) от диаметра (µm).
-
-    Подход:
-    - сортируем ступени по D50 по убыванию (крупные -> мелкие)
-    - для точки d_i считаем долю массы, прошедшую ниже этой ступени:
-        F(d_i) = sum_{j>i} m_j / total * 100%
-
-    Возвращает:
-        diam_um: диаметры (µm) по возрастанию
-        cum_pct: cumulative undersize (%) по возрастанию
     """
     res_list = list(records)
     _validate_records(res_list)
 
     # Сортировка отсечных диаметров D50 (сверху крупные, снизу мелкие)
-    res_sorted = sorted(res_list, key=lambda r: r.d50_um, reverse=True)
+    res_sorted = sorted(res_list, key=lambda r: r.d_low, reverse=True)
 
-    d50 = np.array([r.d50_um for r in res_sorted], dtype=float)
-    mass = np.array([r.mass_ug for r in res_sorted], dtype=float)
+    d50 = np.array([r.d_low for r in res_sorted], dtype=float)
+    mass = np.array([r.mass for r in res_sorted], dtype=float)
 
     total = float(np.sum(mass))
 
@@ -59,11 +52,10 @@ def compute_cumulative_undersize(
     )
 
     # Граничные условия для графика и интерполяции
-    d_pos = d50[d50 > 0.0]
-    d_top = float(np.max(d_pos)) * 10.0
+    d_top = 10.0
 
-    diam = np.concatenate(([0.0], d50, [d_top])).astype(float)
-    cum = np.concatenate(([0.0], cum_at_d50, [100.0])).astype(float)
+    diam = np.concatenate((d50, [d_top])).astype(float)
+    cum = np.concatenate((cum_at_d50, [100.0])).astype(float)
 
     # Упорядочивание по возрастанию диаметра
     order = np.argsort(diam)
@@ -218,7 +210,7 @@ def compute_mmad(records: Iterable[StageRecord]) -> MmadResult:
     diam_um, cum_pct = compute_cumulative_undersize(rec_list)
 
     # Суммарная масса (для FPD)
-    total_mass_ug = float(sum(float(r.mass_ug) for r in rec_list))
+    total_mass_ug = float(sum(float(r.mass) for r in rec_list))
 
     # MMAD и GSD
     mmad_um = interpolate_d_at_cum_pct_logx(diam_um, cum_pct, target_pct=50.0)
