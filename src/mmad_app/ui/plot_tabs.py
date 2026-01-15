@@ -201,6 +201,7 @@ class PlotTabs(QWidget):
         fig.tight_layout()
         canvas.draw()
 
+"""
     def _plot_mass_density_distribution(self, records: List[StageRecord]) -> None:
 
         dg_list = []
@@ -265,10 +266,18 @@ class PlotTabs(QWidget):
         order = np.argsort(x)
         x = x[order]
         dens_norm = dens_norm[order]
+        dln = dln[order]
         area = float(np.sum(dens_norm * dln))
         print("Площадь по ln(d):", area)
 
-        ax.plot(x, dens_norm, marker="o", linewidth=1.6)
+        ax.bar(
+            x,
+            dens_norm,
+            width=dln,
+            align="center",
+            alpha=0.7,
+            edgecolor="black",
+        )
 
         ax.set_xlabel("ln(dg / µm)")
         ax.set_ylabel("(m/M) / Δln(d)")
@@ -277,3 +286,5 @@ class PlotTabs(QWidget):
 
         fig.tight_layout()
         canvas.draw()
+"""
+
