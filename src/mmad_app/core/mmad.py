@@ -197,29 +197,50 @@ def interpolate_cum_pct_at_d_logx(
 
 def compute_mmad(records: Iterable[StageRecord]) -> MmadResult:
     """
-    Полный расчёт метрик APSD:
-    - cumulative undersize
-    - MMAD (D50), d15.87, d84.13 -> GSD
-    - d10, d90 -> Span
-    - FPF для порога 5 µm (по умолчанию)
+    Полный расчёт метрик APSD (массовое распределение по аэродинамическому диаметру).
 
-    Примечание:
-    - FPF здесь понимается как доля массы ниже заданного порога (например, 5 µm).
+    Считаем:
+    1) Кумулятивную кривую cumulative undersize (%): F(d)
+    2) Квантили распределения: d10, d16, d50 (MMAD), d84, d90
+       (d16 и d84 — это 16% и 84% кумулятивы; иногда вместо 15.87/84.13)
+    3) GSD по "нормальным" квантилям 15.87/84.13:
+          GSD = sqrt(d84.13 / d15.87)
+    4) Span = (d90 - d10) / d50
+    5) FPF(<5 µm) по умолчанию
+    6) Доп. диаметры по интервалам (используем границы ступеней):
+       - Логарифмический средний диаметр (геометрическое среднее):
+             d_g = exp(Σ w_i ln(d_i))
+       - Среднемассовый диаметр (массо-взвешенный арифметический):
+             d_mass = Σ w_i d_i
+       - Модальный аэродинамический диаметр (мода по интервалам):
+             d_mode = d_i, где w_i максимально
+
+    Где w_i = m_i / Σ m_i, а d_i — репрезентативный диаметр интервала ступени:
+       d_i = sqrt(d_low * d_high) (средний геометрический диаметр интервала).
     """
     rec_list = list(records)
     diam_um, cum_pct = compute_cumulative_undersize(rec_list)
 
-    # Суммарная масса (для FPD)
+    # Суммарная масса
     total_mass_ug = float(sum(float(r.mass) for r in rec_list))
+    if total_mass_ug <= 0.0:
+        raise ValueError("Суммарная масса должна быть > 0.")
 
-    # MMAD и GSD
+    # -----------------------------
+    # 1) Квантили по кумулятиве
+    # -----------------------------
     mmad_um = interpolate_d_at_cum_pct_logx(diam_um, cum_pct, target_pct=50.0)
+
+    # "Инженерные" квантили 16/84
+    d16_um = interpolate_d_at_cum_pct_logx(diam_um, cum_pct, target_pct=16.0)
+    d84_um = interpolate_d_at_cum_pct_logx(diam_um, cum_pct, target_pct=84.0)
+
+    # "Нормальные" квантили для GSD
     d15_87_um = interpolate_d_at_cum_pct_logx(diam_um, cum_pct, target_pct=15.87)
     d84_13_um = interpolate_d_at_cum_pct_logx(diam_um, cum_pct, target_pct=84.13)
 
     if d15_87_um <= 0.0:
         raise ValueError("d15.87 получился <= 0, невозможно вычислить GSD.")
-
     gsd = float(np.sqrt(d84_13_um / d15_87_um))
 
     # D10/D90 и Span
@@ -228,24 +249,80 @@ def compute_mmad(records: Iterable[StageRecord]) -> MmadResult:
 
     if mmad_um <= 0.0:
         raise ValueError("MMAD получился <= 0, невозможно вычислить Span.")
-
     span = float((d90_um - d10_um) / mmad_um)
 
     # FPF для порога 5 µm
     fpf_cutoff_um = 5.0
     fpf_pct = interpolate_cum_pct_at_d_logx(diam_um, cum_pct, d_um=fpf_cutoff_um)
 
+    # ---------------------------------------------------
+    # 2) Массо-взвешенные средние и мода по интервалам
+    # ---------------------------------------------------
+    # Важно: эти величины считаем по интервалам ступеней, а не по кумулятиве.
+    # Для каждой ступени нужен d_low, d_high и масса.
+    dg_bins: List[float] = []
+    w_bins: List[float] = []
+
+    for r in rec_list:
+        d_low = float(getattr(r, "d_low", 0.0))
+        d_high = float(getattr(r, "d_high", 0.0))
+        m = float(getattr(r, "mass", 0.0))
+
+        # Пропускаем некорректные интервалы и нулевую массу
+        if m <= 0.0:
+            continue
+        if d_low <= 0.0 or d_high <= 0.0 or d_high <= d_low:
+            continue
+
+        # Репрезентативный диаметр интервала: геометрический центр
+        d_bin = float(np.sqrt(d_low * d_high))
+        dg_bins.append(d_bin)
+        w_bins.append(m / total_mass_ug)
+
+    # Значения по умолчанию, если не удалось собрать интервалы
+    log_mean_um = float("nan")
+    mass_mean_um = float("nan")
+    modal_um = float("nan")
+
+    if dg_bins:
+        d_arr = np.array(dg_bins, dtype=float)
+        w_arr = np.array(w_bins, dtype=float)
+
+        # Нормировка весов на случай численных отклонений
+        w_sum = float(np.sum(w_arr))
+        if w_sum > 0.0:
+            w_arr = w_arr / w_sum
+
+        # Логарифмический средний диаметр (геометрическое среднее)
+        # d_g = exp(Σ w_i ln(d_i))
+        log_mean_um = float(np.exp(np.sum(w_arr * np.log(d_arr))))
+
+        # Среднемассовый (массо-взвешенный арифметический) диаметр
+        # d_mass = Σ w_i d_i
+        mass_mean_um = float(np.sum(w_arr * d_arr))
+
+        # Модальный диаметр (диаметр интервала с максимальной долей массы)
+        modal_um = float(d_arr[int(np.argmax(w_arr))])
+
+    # ---------------------------------------------------
+    # 3) Возвращаем результат (добавьте поля в MmadResult)
+    # ---------------------------------------------------
     return MmadResult(
         mmad_um=float(mmad_um),
         gsd=float(gsd),
+        d10_um=float(d10_um),
+        d16_um=float(d16_um),
+        d84_um=float(d84_um),
+        d90_um=float(d90_um),
         d15_87_um=float(d15_87_um),
         d84_13_um=float(d84_13_um),
-        d10_um=float(d10_um),
-        d90_um=float(d90_um),
         span=float(span),
         fpf_cutoff_um=float(fpf_cutoff_um),
         fpf_pct=float(fpf_pct),
         total_mass_ug=float(total_mass_ug),
+        log_mean_um=float(log_mean_um),
+        mass_mean_um=float(mass_mean_um),
+        modal_um=float(modal_um),
         diam_um=diam_um,
         cum_undersize_pct=cum_pct,
     )

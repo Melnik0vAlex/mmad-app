@@ -37,20 +37,22 @@ class MmadResult:
 
     mmad_um: float
     gsd: float
+    d10_um: float
+    d16_um: float
+    d84_um: float
+    d90_um: float
     d15_87_um: float
     d84_13_um: float
-
-    d10_um: float
-    d90_um: float
     span: float
-
     fpf_cutoff_um: float
     fpf_pct: float
-
     total_mass_ug: float
-
+    log_mean_um: float
+    mass_mean_um: float
+    modal_um: float
     diam_um: np.ndarray
     cum_undersize_pct: np.ndarray
+
 
 @dataclass(frozen=True)
 class ProbitFitResult:

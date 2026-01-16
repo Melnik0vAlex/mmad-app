@@ -106,7 +106,7 @@ class PlotTabs(QWidget):
         self._plot_cumulative(result)
         self._plot_log_probit(result)
         self._plot_bar(records)
-        self._plot_mass_density_distribution(records)
+        self._plot_mass_density_distribution(records, result)
 
 
     def _plot_cumulative(self, result: MmadResult) -> None:
@@ -201,12 +201,11 @@ class PlotTabs(QWidget):
         fig.tight_layout()
         canvas.draw()
 
-"""
-    def _plot_mass_density_distribution(self, records: List[StageRecord]) -> None:
+    def _plot_mass_density_distribution(self,  records: List[StageRecord], result: MmadResult) -> None:
 
-        dg_list = []
-        mass_list = []
-        dln_list = []
+        dg_list: List[float] = []
+        dln_list: List[float] = []
+        mass_list: List[float] = []
 
         for stage in records:
             d_low = float(stage.d_low)
@@ -214,14 +213,13 @@ class PlotTabs(QWidget):
             m = float(stage.mass)
 
             if d_low <= 0.0 or d_high <= 0.0 or d_high <= d_low:
-                # Некорректные интервалы лучше явно отбрасывать
+                continue
+
+            d_ln = float(np.log(d_high / d_low))
+            if d_ln <= 0.0:
                 continue
 
             d_g = float(np.sqrt(d_low * d_high))
-            d_ln = float(np.log(d_high / d_low))
-
-            if d_ln <= 0.0:
-                continue
 
             dg_list.append(d_g)
             dln_list.append(d_ln)
@@ -235,17 +233,18 @@ class PlotTabs(QWidget):
 
         if len(mass_list) < 2:
             ax.set_title("Недостаточно корректных интервалов для построения графика")
-            ax.set_xlabel("ln(dg / µm)")
+            ax.set_xlabel("ln(d / µm)")
             ax.set_ylabel("(m/M) / Δln(d)")
             ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
             fig.tight_layout()
             canvas.draw()
             return
 
-        mass_total = float(np.sum(mass_list))
+        mass = np.array(mass_list, dtype=float)
+        mass_total = float(np.sum(mass))
         if mass_total <= 0.0:
             ax.set_title("Суммарная масса <= 0: невозможно нормировать")
-            ax.set_xlabel("ln(dg / µm)")
+            ax.set_xlabel("ln(d / µm)")
             ax.set_ylabel("(m/M) / Δln(d)")
             ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
             fig.tight_layout()
@@ -254,37 +253,60 @@ class PlotTabs(QWidget):
 
         dg = np.array(dg_list, dtype=float)
         dln = np.array(dln_list, dtype=float)
-        mass = np.array(mass_list, dtype=float)
 
-        # Нормированная плотность по ln(d): интеграл по ln(d) равен 1
+        # Экспериментальная плотность по ln(d): интеграл ≈ 1
         dens_norm = (mass / mass_total) / dln
 
-        # Ось X: ln(dg / µm)
+        # Координата по оси X
         x = np.log(dg)
 
-        # Сортировка по X для красивой линии
+        # Сортировка (важно: сортируем все массивы одинаково)
         order = np.argsort(x)
         x = x[order]
         dens_norm = dens_norm[order]
         dln = dln[order]
-        area = float(np.sum(dens_norm * dln))
-        print("Площадь по ln(d):", area)
 
+        # --- 1) Эксперимент: столбцы шириной Δln(d) ---
         ax.bar(
             x,
             dens_norm,
             width=dln,
             align="center",
-            alpha=0.7,
+            alpha=0.6,
             edgecolor="black",
+            label="Эксперимент: (m/M)/Δln(d)",
         )
 
-        ax.set_xlabel("ln(dg / µm)")
+        # --- 2) Модель: логнормальная плотность по ln(d) из log–probit фита ---
+        # Берём параметры из cumulative (result), а не из интервалов
+        fit = fit_probit(result.diam_um, result.cum_undersize_pct)
+
+        # fit.a и fit.b относятся к probit = a*log10(d) + b, где probit = z + 5
+        a = float(fit.a)
+        b = float(fit.b)
+
+        if a > 0.0:
+            sigma = float(np.log(10.0) / a)
+            mu = float(-(b - 5.0) * sigma)
+
+            x_grid = np.linspace(float(np.min(x)) - 0.25, float(np.max(x)) + 0.25, 400)
+            # g(x) — плотность по ln(d) (интеграл = 1)
+            model = (1.0 / (sigma * np.sqrt(2.0 * np.pi))) * np.exp(
+                -0.5 * ((x_grid - mu) / sigma) ** 2
+            )
+
+            ax.plot(
+                x_grid,
+                model,
+                linewidth=2.0,
+                label=f"Логнормальная модель (R²={fit.r2:.3f})",
+            )
+
+        ax.set_xlabel("ln(d / µm)")
         ax.set_ylabel("(m/M) / Δln(d)")
-        ax.set_title("Нормированная массовая плотность по ln(d) (по интервалам ступеней)")
+        ax.set_title("Массовая плотность по ln(d): эксперимент vs логнормальная модель")
         ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
+        ax.legend(loc="best")
 
         fig.tight_layout()
         canvas.draw()
-"""
-

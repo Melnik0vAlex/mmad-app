@@ -33,3 +33,4 @@ lerna-debug.log*
 .DS_Store
 *.sqlite3
 docs/variable.txt
+.python-version
