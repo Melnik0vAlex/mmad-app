@@ -98,10 +98,7 @@ class PlotTabs(QWidget):
 
     def plot_all(self, records: List[StageRecord], result: MmadResult) -> None:
         """
-        Рисует все графики.
-
-        records нужны для barplot (масса по ступеням),
-        result содержит cumulative и MMAD/GSD/и т.д.
+        Рисует все графики
         """
         self._plot_cumulative(result)
         self._plot_log_probit(result)
@@ -123,8 +120,8 @@ class PlotTabs(QWidget):
             X = log10(d)
             Y = probit = norm.ppf(p) + 5
         """
-        d = np.asarray(result.diam_um, dtype=float)
-        cum = np.asarray(result.cum_undersize_pct, dtype=float)
+        d = np.asarray(result.diam_um[1:9], dtype=float)
+        cum = np.asarray(result.cum_undersize_pct[1:9], dtype=float)
 
         mask = d > 0.0
         d = d[mask]
@@ -149,9 +146,9 @@ class PlotTabs(QWidget):
         ax.plot(lx, probit, marker="o", linestyle="None", label="Data (probit)")
         ax.plot(lx_line, probit_line, linestyle="--", label=f"Fit (R²={fit.r2:.3f})")
 
-        ax.set_xlabel("log10(d), d в µm")
+        ax.set_xlabel("log10(d), мкм")
         ax.set_ylabel("Probit = Φ⁻¹(p) + 5")
-        ax.set_title("Log–probit представление (линейная аппроксимация)")
+        ax.set_title("Лог-пробит распределение накопленной массы частиц аэрозоля по размерам")
         ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
         ax.legend(loc="best")
 
@@ -190,14 +187,21 @@ class PlotTabs(QWidget):
         fig.clear()
         ax = fig.add_subplot(111)
         x_pos = np.arange(len(centers_um), dtype=int)
-        ax.bar(x_pos, np.array(masses_ug, dtype=float))
+        ax.bar(
+            x=x_pos,
+            height=np.array(masses_ug, dtype=float),
+            width=0.8,
+            align="center",
+            alpha=0.6,
+            edgecolor="black"
+            )
         ax.set_xticks(x_pos)
         formatted_labels = [f"{float(x):.2f}" for x in labels]
         ax.set_xticklabels(formatted_labels)
-        ax.set_xlabel("dср, мкм")
-        ax.set_ylabel("Масса, мкг")
+        ax.set_xlabel("Средний геометрический диаметр ступени, мкм")
+        ax.set_ylabel("Масса, мкг", loc="center")
         ax.set_title("Распределение размеров частиц аэрозоля по массе")
-        ax.grid(True, axis="y", linestyle=":", linewidth=0.8, alpha=0.6)
+        ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
         fig.tight_layout()
         canvas.draw()
 

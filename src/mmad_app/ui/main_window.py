@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
+    QSplitter
 )
 
 from mmad_app.core.models import StageRecord
@@ -37,7 +38,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
 
-        self.setWindowTitle("MMAD калькулятор (Andersen Cascade Impactor)")
+        self.setWindowTitle("MMAD калькулятор")
         self.resize(1100, 700)
 
         # Центральный виджет
@@ -45,17 +46,27 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         main_layout = QHBoxLayout(central)
+        main_layout.setContentsMargins(8, 8, 8, 8)
 
-        # Левая панель: ввод
-        left_layout = QVBoxLayout()
-        main_layout.addLayout(left_layout, stretch=1)
+        # QSplitter по горизонтали
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)  # панели не схлопываются в "ноль"
+        splitter.setHandleWidth(8)
 
-        title = QLabel("Ввод данных по ступеням импактора")
+        main_layout.addWidget(splitter)
+
+        # QSplitter принимает ТОЛЬКО QWidget
+        # Левая панель: исходные данные
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+
+        title = QLabel("Исходные данные")
         title.setStyleSheet("font-size: 16px; font-weight: 600;")
         left_layout.addWidget(title)
 
         hint = QLabel(
-            "Введите D50 (мкм) и массу (мкг) для каждой ступени импактора.\n"
+            "Распределение массы частиц аэрозоля по ступеням импактора\n"
         )
         hint.setWordWrap(True)
         left_layout.addWidget(hint)
@@ -64,7 +75,9 @@ class MainWindow(QMainWindow):
         self.table.setHorizontalHeaderLabels(
             ["Ступень", "dн, мкм", "dв, мкм", "Масса, мкг"])
         self.table.horizontalHeader().setStretchLastSection(True)
-        left_layout.addWidget(self.table)
+        self.table.setSizePolicy(self.table.sizePolicy().horizontalPolicy(),
+                                 self.table.sizePolicy().verticalPolicy())
+        left_layout.addWidget(self.table, stretch=1)
 
         self._fill_default_rows()
 
@@ -73,28 +86,51 @@ class MainWindow(QMainWindow):
 
         self.btn_calc = QPushButton("Рассчитать")
         self.btn_calc.clicked.connect(self.on_calculate)
-        btn_row.addWidget(self.btn_calc)
+        btn_row.addWidget(self.btn_calc, stretch=1)
 
         self.btn_demo = QPushButton("Тестовые данные")
         self.btn_demo.clicked.connect(self.on_fill_demo)
-        btn_row.addWidget(self.btn_demo)
+        btn_row.addWidget(self.btn_demo, stretch=1)
 
         self.btn_clear = QPushButton("Очистить")
         self.btn_clear.clicked.connect(self.on_clear)
-        btn_row.addWidget(self.btn_clear)
+        btn_row.addWidget(self.btn_clear, stretch=1)
 
-        self.result_label = QLabel("Результаты расчета:")
+        self.result_label = QLabel("Результаты расчета")
         self.result_label.setStyleSheet("font-size: 16px; font-weight: 600;")
         left_layout.addWidget(self.result_label)
 
-        # left_layout.addStretch(1)
+        left_layout.addStretch(1)
 
-        # Правая панель: график
-        right_layout = QVBoxLayout()
-        main_layout.addLayout(right_layout, stretch=1)
+        # Правая панель
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
 
         self.plot_tabs = PlotTabs()
         right_layout.addWidget(self.plot_tabs)
+
+        # Кнопки под графиком
+        self.btn_plot_row = QHBoxLayout()
+        self.btn_save = QPushButton("Сохранить")
+        # self.btn_save.clicked.connect(se)
+        self.btn_plot_row.addWidget(self.btn_save)
+        self.btn_plot_row.addStretch(1)
+
+        right_layout.addLayout(self.btn_plot_row)
+
+
+        # Добавлие панелей в splitter
+        splitter.addWidget(left_panel)
+        splitter.addWidget(right_panel)
+
+        # Настройка стартовых пропорции splitter (в пикселях)
+        splitter.setSizes([480, 620])
+
+        # Настройка минимальной ширины
+        left_panel.setMinimumWidth(400)
+        right_panel.setMinimumWidth(400)
+
 
     def _fill_default_rows(self) -> None:
         """
