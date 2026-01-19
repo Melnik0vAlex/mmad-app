@@ -1,17 +1,14 @@
 # -*- coding: utf-8 -*-
 # src/mmad_app/ui/plot_tabs.py
 """
-Вкладки с графиками (QTabWidget):
-1) Cumulative undersize (обычный график)
-2) Log–probit (z+5 против log10(d))
-3) Barplot (масса по ступеням)
-
+Вкладки с графиками (QTabWidget)
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import List
+from pathlib import Path
 
 import numpy as np
 from PySide6.QtWidgets import QTabWidget, QVBoxLayout, QWidget
@@ -148,7 +145,7 @@ class PlotTabs(QWidget):
 
         ax.set_xlabel("log10(d), мкм")
         ax.set_ylabel("Probit = Φ⁻¹(p) + 5")
-        ax.set_title("Лог-пробит распределение накопленной массы частиц аэрозоля по размерам")
+        ax.set_title("Лог-пробит распределение накопленной массы частиц аэрозоля по размерам", wrap=True)
         ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
         ax.legend(loc="best")
 
@@ -200,7 +197,7 @@ class PlotTabs(QWidget):
         ax.set_xticklabels(formatted_labels)
         ax.set_xlabel("Средний геометрический диаметр ступени, мкм")
         ax.set_ylabel("Масса, мкг", loc="center")
-        ax.set_title("Распределение размеров частиц аэрозоля по массе")
+        ax.set_title("Распределение размеров частиц по массе", wrap=True)
         ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
         fig.tight_layout()
         canvas.draw()
@@ -308,9 +305,24 @@ class PlotTabs(QWidget):
 
         ax.set_xlabel("ln(d / µm)")
         ax.set_ylabel("(m/M) / Δln(d)")
-        ax.set_title("Массовая плотность по ln(d): эксперимент vs логнормальная модель")
+        ax.set_title("Массовая плотность распределения размеров частиц", wrap=True)
         ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
         ax.legend(loc="best")
 
         fig.tight_layout()
         canvas.draw()
+
+
+    def save_current_plot(self, filepath: str | Path, *, dpi: int = 300) -> None:
+        """
+        Сохраняет график с текущей вкладки в файл.
+        """
+        current = self.tabs.currentWidget()
+
+        # current должен быть PlotWidget
+        if hasattr(current, "save_figure"):
+            current.save_figure(filepath, dpi=dpi) # type: ignore
+        else:
+            raise TypeError("Текущая вкладка не является PlotWidget и не поддерживает сохранение.")
+
+        

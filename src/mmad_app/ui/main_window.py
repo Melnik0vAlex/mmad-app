@@ -11,8 +11,11 @@
 
 from __future__ import annotations
 
-from typing import List
 
+import csv
+from pathlib import Path
+
+from typing import List, Optional
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -24,12 +27,14 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
-    QSplitter
+    QSplitter,
+    QFileDialog
 )
 
 from mmad_app.core.models import StageRecord
 from mmad_app.core.mmad import compute_mmad
 from mmad_app.ui.plot_tabs import PlotTabs
+from mmad_app.ui.result_panel import ResultsPanel
 
 
 class MainWindow(QMainWindow):
@@ -39,7 +44,7 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("MMAD калькулятор")
-        self.resize(1100, 700)
+        self.resize(1200, 800)
 
         # Центральный виджет
         central = QWidget()
@@ -96,10 +101,6 @@ class MainWindow(QMainWindow):
         self.btn_clear.clicked.connect(self.on_clear)
         btn_row.addWidget(self.btn_clear, stretch=1)
 
-        self.result_label = QLabel("Результаты расчета")
-        self.result_label.setStyleSheet("font-size: 16px; font-weight: 600;")
-        left_layout.addWidget(self.result_label)
-
         left_layout.addStretch(1)
 
         # Правая панель
@@ -107,18 +108,37 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
 
+        result_title = QLabel("Результаты расчетов")
+        result_title.setStyleSheet("font-size: 16px; font-weight: 600;")
+        right_layout.addWidget(result_title)
+
+        self.results_panel = ResultsPanel()
+        right_layout.addWidget(self.results_panel)
+
         self.plot_tabs = PlotTabs()
         right_layout.addWidget(self.plot_tabs)
 
         # Кнопки под графиком
         self.btn_plot_row = QHBoxLayout()
-        self.btn_save = QPushButton("Сохранить")
-        # self.btn_save.clicked.connect(se)
-        self.btn_plot_row.addWidget(self.btn_save)
+
+        self.btn_save_current = QPushButton("Сохранить")
+        self.btn_save_all = QPushButton("Сохранить все графики…")
+        self.btn_export_csv = QPushButton("Экспорт CSV…")
+
+        self.btn_export_csv.setEnabled(False)
+        self.btn_save_current.setEnabled(False)
+        self.btn_save_all.setEnabled(False)
+
+        self.btn_save_current.clicked.connect(self.on_export_save_current_plot)
+        self.btn_save_all.clicked.connect(self.on_export_save_all_plots)
+        self.btn_export_csv.clicked.connect(self.on_export_csv)
+
+        self.btn_plot_row.addWidget(self.btn_save_current)
+        self.btn_plot_row.addWidget(self.btn_save_all)
+        self.btn_plot_row.addWidget(self.btn_export_csv)
         self.btn_plot_row.addStretch(1)
 
         right_layout.addLayout(self.btn_plot_row)
-
 
         # Добавлие панелей в splitter
         splitter.addWidget(left_panel)
@@ -163,6 +183,7 @@ class MainWindow(QMainWindow):
                                        Qt.AlignmentFlag.AlignVCenter)
             self.table.setItem(row, 3, mass_item)
 
+
     def on_clear(self) -> None:
         """Очищает числовые поля, сбрасывает результат и график."""
         for row in range(self.table.rowCount()):
@@ -170,10 +191,16 @@ class MainWindow(QMainWindow):
             if mass_item is not None:
                 mass_item.setText("")
 
-        self.result_label.setText("Результаты расчета:")
+        self.btn_export_csv.setEnabled(False)
+        self.btn_save_current.setEnabled(False)
+        self.btn_save_all.setEnabled(False)
+
+        self.results_panel.clear()
+
         self.plot_tabs.tab_cum.plot_empty()
         self.plot_tabs.tab_probit.plot_empty()
         self.plot_tabs.tab_bar.plot_empty()
+
 
     def _read_records_from_table(self) -> List[StageRecord]:
         """
@@ -214,6 +241,7 @@ class MainWindow(QMainWindow):
 
         return records
 
+
     def on_calculate(self) -> None:
         """Считывает таблицу, считает MMAD, обновляет результат и график."""
         try:
@@ -223,16 +251,13 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", str(exc))
             return
 
-        self.result_label.setText(
-            f"MMAD: {result.mmad_um:.2f} мкм\n"
-            f"GSD: {result.gsd:.2f}\n"
-            f"d10: {result.d10_um:.2f} мкм\n"
-            f"d90: {result.d90_um:.2f} мкм\n"
-            f"Span: {result.span:.2f}\n"
-            f"FPF(<{result.fpf_cutoff_um:.1f} мкм): {result.fpf_pct:.2f} %"
-        )
-
+        self.results_panel.set_result(result)
         self.plot_tabs.plot_all(records=records, result=result)
+
+        self.btn_export_csv.setEnabled(True)
+        self.btn_save_current.setEnabled(True)
+        self.btn_save_all.setEnabled(True)
+
 
     def on_fill_demo(self) -> None:
         """
@@ -249,3 +274,183 @@ class MainWindow(QMainWindow):
 
         # После заполнения сразу считаем и рисуем
         self.on_calculate()
+
+
+    def on_save_plot_clicked(self) -> None:
+        """
+        Сохраняет график текущей вкладки.
+        """
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Сохранить график",
+            "plot.png",
+            "PNG (*.png);;PDF (*.pdf);;SVG (*.svg)",
+        )
+        if not filename:
+            return
+
+        try:
+            self.plot_tabs.save_current_plot(filename, dpi=300)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Ошибка сохранения", str(exc))
+
+
+    def save_all_plots(self, directory: str | Path, *, dpi: int = 300) -> None:
+        """
+        Сохраняет все графики в указанную папку.
+
+        Файлы сохраняются в PNG. При желании можно сменить расширение на PDF/SVG.
+        """
+        out_dir = Path(directory)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        count_saved = 0
+
+        for i in range(self.plot_tabs.tabs.count()):
+            widget = self.plot_tabs.tabs.widget(i)
+            title = self.plot_tabs.tabs.tabText(i).strip()
+
+            # Безопасное имя файла
+            safe = (
+                title.replace(" ", "_")
+                .replace("/", "_")
+                .replace("\\", "_")
+                .replace("–", "-")
+            )
+
+            filename = f"{i + 1:02d}_{safe}.png"
+            path = out_dir / filename
+
+            if hasattr(widget, "save_figure"):
+                widget.save_figure(path, dpi=dpi)
+                count_saved += 1
+
+        if count_saved == 0:
+            raise RuntimeError("Нет вкладок с графиками, поддерживающих сохранение.")
+
+
+    def on_export_save_current_plot(self) -> None:
+        """
+        Сохраняет график текущей вкладки PlotTabs.
+        """
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Сохранить график (текущая вкладка)",
+            "plot.png",
+            "PNG (*.png);;PDF (*.pdf);;SVG (*.svg)",
+        )
+        if not filename:
+            return
+
+        try:
+            # Вы добавляли ранее метод save_current_plot(...)
+            self.plot_tabs.save_current_plot(filename, dpi=300)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить график:\n{exc}")
+
+
+    def on_export_save_all_plots(self) -> None:
+        """
+        Сохраняет все вкладки с графиками в выбранную папку.
+        """
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "Выберите папку для сохранения графиков",
+        )
+        if not directory:
+            return
+        try:
+            self.save_all_plots(directory, dpi=300)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить графики:\n{exc}")
+            return
+
+        QMessageBox.information(self, "Готово", "Графики сохранены.")
+
+
+    def on_export_csv(self) -> None:
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Экспорт CSV",
+            "mmad_export.csv",
+            "CSV (*.csv)",
+        )
+        if not filename:
+            return
+
+        try:
+            records = self._read_records_from_table()
+
+            # Важно: у вас должен быть сохранён последний результат.
+            # Например, после расчёта:
+            # self._last_result = result
+            result = getattr(self, "_last_result", None)
+
+            self._write_export_csv(Path(filename), records, result)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Ошибка", f"Не удалось экспортировать CSV:\n{exc}")
+            return
+
+        QMessageBox.information(self, "Готово", "CSV успешно сохранён.")
+
+
+    def _write_export_csv(
+        self,
+        path: Path,
+        records: List["StageRecord"],
+        result
+    ) -> None:
+        """
+        Записывает CSV:
+        1) Секция метрик (если result не None)
+        2) Секция таблицы ступеней
+        """
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        with path.open("w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f, delimiter=";")
+
+            # 1) Метрики
+            w.writerow(["# META"])
+            if result is None:
+                w.writerow(["message", "Результаты не рассчитаны"])
+            else:
+                # Пишем только ключевые поля. Добавьте/уберите по вкусу.
+                w.writerow(["mmad_um", f"{result.mmad_um:.6g}"])
+                w.writerow(["gsd", f"{result.gsd:.6g}"])
+                w.writerow(["d10_um", f"{result.d10_um:.6g}"])
+                if hasattr(result, "d16_um"):
+                    w.writerow(["d16_um", f"{result.d16_um:.6g}"])
+                if hasattr(result, "d84_um"):
+                    w.writerow(["d84_um", f"{result.d84_um:.6g}"])
+                w.writerow(["d90_um", f"{result.d90_um:.6g}"])
+                w.writerow(["span", f"{result.span:.6g}"])
+                w.writerow(["fpf_cutoff_um", f"{result.fpf_cutoff_um:.6g}"])
+                w.writerow(["fpf_pct", f"{result.fpf_pct:.6g}"])
+                w.writerow(["total_mass_ug", f"{result.total_mass_ug:.6g}"])
+
+                # Доп. поля (если вы добавили)
+                for name in ("log_mean_um", "mass_mean_um", "modal_um"):
+                    if hasattr(result, name):
+                        val = getattr(result, name)
+                        try:
+                            w.writerow([name, f"{float(val):.6g}"])
+                        except Exception:
+                            w.writerow([name, ""])
+
+            w.writerow([])
+
+            # ----------------
+            # 2) Таблица ступеней
+            # ----------------
+            w.writerow(["# TABLE"])
+            w.writerow(["stage_name", "d_low_um", "d_high_um", "mass_ug"])
+
+            for r in records:
+                # Подстройте под ваши реальные поля StageRecord
+                stage_name = getattr(r, "stage_name", "")
+                d_low = getattr(r, "d_low", "")
+                d_high = getattr(r, "d_high", "")
+                mass = getattr(r, "mass", "")
+
+                w.writerow([stage_name, d_low, d_high, mass])
