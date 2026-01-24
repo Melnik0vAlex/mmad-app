@@ -2,14 +2,10 @@
 # ui/results_panel.py
 
 from __future__ import annotations
-
-from dataclasses import asdict
 from typing import Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFormLayout, QGroupBox, QLabel
-from PySide6.QtGui import QFont
-
 
 class ResultsPanel(QGroupBox):
     """

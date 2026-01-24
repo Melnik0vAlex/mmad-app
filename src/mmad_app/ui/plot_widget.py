@@ -1,27 +1,29 @@
 # -*- coding: utf-8 -*-
 # src/mmad_app/ui/plot_widget.py
 """
-Виджет графика (matplotlib) для Qt (PySide6).
+Виджет графика (matplotlib).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional, Sequence, Tuple
 
 import numpy as np
+from scipy.stats import norm
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
+from matplotlib.axes import Axes
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.ticker import AutoMinorLocator, MaxNLocator, MultipleLocator
 
-class PlotWidget(QWidget):
-    """
-    Qt-виджет, содержащий matplotlib canvas.
+from mmad_app.core.models import ProbitLine
+from mmad_app.core.probit import clip_prob, fit_probit
 
-    Это обёртка, чтобы в main_window.py было просто вызывать:
-        plot_widget.plot_cumulative(...)
-    """
+
+class PlotWidget(QWidget):
+    """Qt-виджет, содержащий matplotlib canvas."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -30,21 +32,30 @@ class PlotWidget(QWidget):
         self._canvas = FigureCanvas(self._figure)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._canvas, stretch=1)
 
         self.plot_empty()
 
-    def plot_empty(self) -> None:
-        """Рисует пустой шаблон графика."""
-        self._figure.clear()
-        # add_subplot(111) - создание оси на фигуре
-        # 111 читается как: 1 строка, 1 колонка, 1-й график.
-        ax = self._figure.add_subplot(111)
-        ax.set_xlabel("dв, мкм")
-        ax.set_ylabel("Накопительная масса < dв, %")
+    def new_axes(self) -> Axes:
+        """
+        Очищает фигуру и возвращает новую ось (subplot 1x1).
 
-        ax.set_ylim(0, 100)
-        ax.set_xlim(0, 10)
+        """
+        self._figure.clear()
+        return self._figure.add_subplot(111)
+
+    def redraw(self, *, tight: bool = True) -> None:
+        """
+        Перерисовывает canvas.
+
+        """
+        if tight:
+            self._figure.tight_layout()
+        self._canvas.draw()
+
+    def apply_default_style(self, ax: Axes) -> None:
+        """Единый стиль делений и сетки."""
         ax.xaxis.set_major_locator(MaxNLocator(nbins=6))
         ax.xaxis.set_minor_locator(AutoMinorLocator(2))
         ax.yaxis.set_major_locator(MultipleLocator(10))
@@ -52,68 +63,74 @@ class PlotWidget(QWidget):
 
         ax.grid(True, which="major", linestyle="-", linewidth=0.8, alpha=0.6)
         ax.grid(True, which="minor", linestyle=":", linewidth=0.6, alpha=0.5)
-        # Важно: matplotlib не рисует автоматически.
-        # draw() говорит: "перерисуй canvas".
-        self._canvas.draw()
+
+    def plot_empty(self) -> None:
+        """Рисует пустой шаблон графика."""
+        ax = self.new_axes()
+        ax.set_xlabel("dв, мкм")
+        ax.set_ylabel("Накопительная масса < dв, %")
+        ax.set_ylim(0, 100)
+        ax.set_xlim(0, 10)
+        self.apply_default_style(ax)
+        self.redraw()
 
     def plot_cumulative(
         self,
         diam_um: np.ndarray,
         cum_pct: np.ndarray,
-        mmad_um: float
+        mmad_um: float,
+        *,
+        d16_um: float | None = None,
+        d84_um: float | None = None,
     ) -> None:
-
-        self._figure.clear()
-        ax = self._figure.add_subplot(111)
+        """Кумулятивная кривая (cumulative undersize)."""
+        ax = self.new_axes()
 
         # 1) Основная кривая
         ax.plot(
             diam_um,
             cum_pct,
             marker="s",
-            markersize=6,               # размер маркера
-            markerfacecolor="orange",   # заливка маркера
-            markeredgecolor="black",    # обводка маркера
+            markersize=6,
+            markerfacecolor="orange",
+            markeredgecolor="black",
             markeredgewidth=0.8,
             linewidth=1.6,
-            label="Накопительная кривая"
+            label="Накопительная кривая",
         )
 
-        ax.set_title("Накопительная кривая массового распределения по аэродинамическому диаметру", wrap=True)
+        ax.set_title(
+            "Накопительная кривая массового распределения по аэродинамическому диаметру",
+            wrap=True,
+        )
+        ax.set_xlabel("Аэродинамический диаметр, мкм")
+        ax.set_ylabel("Накопленная масса < dв, %")
 
-        # 2) Оси и пределы
-        ax.set_ylim(0, 102)
+        # 2) Пределы по Y
+        ax.set_ylim(-2.0, 102.0)
 
-        # X-лимиты: берём только положительные диаметры
-        x_pos = diam_um[diam_um > 0.0]
+        # 3) Пределы по X: только положительные диаметры + небольшой padding
+        x_pos = np.asarray(diam_um, dtype=float)
+        x_pos = x_pos[np.isfinite(x_pos) & (x_pos > 0.0)]
+
         if x_pos.size > 0:
             x_min = float(np.min(x_pos))
             x_max = float(np.max(x_pos))
-
-            stage_ticks = np.sort(np.unique(x_pos[x_pos < x_max]))
-            if stage_ticks.size > 0:
-                ax.set_xlabel("Аэродинамический диаметр, мкм")
-                ax.set_ylabel("Накопленная масса < dв, %")
-
-            # Отступ 5% диапазона, но не меньше небольшой константы
             pad = max(0.05 * (x_max - x_min), 0.2)
             ax.set_xlim(max(0.0, x_min - pad), x_max + pad)
+        else:
+            ax.set_xlim(0.0, 10.0)
 
-        # 3) Красивые деления (ticks)
-        # Y: основные деления каждые 10%, мелкие — более частые
-        ax.yaxis.set_major_locator(MultipleLocator(10))
-        ax.yaxis.set_minor_locator(AutoMinorLocator(2))
-
+        # 4) Тики: только "основные" (без minor)
         ax.xaxis.set_major_locator(MaxNLocator(nbins=6))
-        ax.xaxis.set_minor_locator(AutoMinorLocator(2))
+        ax.yaxis.set_major_locator(MultipleLocator(10))
 
-        # 4) Сетка: major + minor
-        ax.grid(True, which="major", linestyle="-", linewidth=0.8, alpha=0.6)
-        ax.grid(True, which="minor", linestyle=":", linewidth=0.6, alpha=0.5)
+        # 5) Сетка
+        ax.grid(True, which="major", linestyle=":", linewidth=0.8, alpha=0.6)
 
-        # 5) Процентильные уровни (горизонтальные линии)
+        # 6) Горизонтальные уровни 16/50/84% + подписи справа
         def _annotate_hline(y: float, text: str) -> None:
-            """Подпись горизонтальной линии справа."""
+            """Подпись горизонтальной линии справа (слегка за правой границей)."""
             x_right = ax.get_xlim()[1]
             ax.text(
                 x_right,
@@ -123,25 +140,299 @@ class PlotWidget(QWidget):
                 ha="left",
                 fontsize=9,
                 color="brown",
-                clip_on=False,  # чтобы подпись могла выходить за пределы осей
+                clip_on=False,
             )
 
-        perc_levels = [16, 50.0, 84]
-        for p in perc_levels:
-            ax.axhline(p, linestyle="--", linewidth=1.2, color="brown")
+        for p in (16.0, 50.0, 84.0):
+            ax.axhline(p, linestyle="--", linewidth=1.2, color="brown", alpha=0.9)
 
-        _annotate_hline(16.0, "16 %")
-        _annotate_hline(84.0, "84 %")
-        _annotate_hline(50, "50 %")
+        # Подписи уровней
+        if d16_um is not None and np.isfinite(float(d16_um)) and float(d16_um) > 0.0:
+            _annotate_hline(16.0, f"16% (d16={float(d16_um):.2f} µm)")
+        else:
+            _annotate_hline(16.0, "16%")
 
-        # 6) Вертикальные линии: d16/MMAD/d84 + подписи
-        ax.axvline(mmad_um, linestyle="--", linewidth=1.4, color="red", label=f"MMAD = {mmad_um:.2f} мкм")
+        _annotate_hline(50.0, "50%")
 
-        # 7) Легенда и финальная укладка
+        if d84_um is not None and np.isfinite(float(d84_um)) and float(d84_um) > 0.0:
+            _annotate_hline(84.0, f"84% (d84={float(d84_um):.2f} µm)")
+        else:
+            _annotate_hline(84.0, "84%")
+
+        # 7) Вертикали: MMAD (+ опционально d16/d84)
+        ax.axvline(
+            mmad_um,
+            linestyle="--",
+            linewidth=1.4,
+            color="red",
+            label=f"MMAD = {mmad_um:.2f} µm",
+        )
+
+        if d16_um is not None and np.isfinite(float(d16_um)) and float(d16_um) > 0.0:
+            ax.axvline(
+                float(d16_um), linestyle=":", linewidth=1.2, color="brown", alpha=0.9
+            )
+
+        if d84_um is not None and np.isfinite(float(d84_um)) and float(d84_um) > 0.0:
+            ax.axvline(
+                float(d84_um), linestyle=":", linewidth=1.2, color="brown", alpha=0.9
+            )
+
+        # 8) Легенда и отрисовка
         ax.legend(loc="lower right", frameon=True)
-        self._figure.tight_layout()
-        self._canvas.draw()
 
+        # Если подписи выходят за пределы, tight_layout можно чуть ужать справа
+        self.redraw(tight=True)
+
+    def plot_probit(
+        self,
+        diam_um: np.ndarray,
+        cum_pct: np.ndarray,
+        *,
+        title: str = "Лог-пробит распределение накопленной массы",
+        use_log10_x: bool = True,
+        clip_eps: float = 1e-6,
+    ) -> ProbitLine:
+        """
+        Рисует log–probit график и линию регрессии.
+
+        Parameters
+        ----------
+        diam_um:
+            Диаметры (мкм), x > 0.
+        cum_pct:
+            Кумулятив (%).
+        use_log10_x:
+            Если True, X = log10(d). Иначе X = d (не рекомендуется для probit).
+        clip_eps:
+            Ограничение p, чтобы избежать +/-inf.
+        """
+        ax = self.new_axes()
+
+        d = np.asarray(diam_um[1:9], dtype=float)
+        y = np.asarray(cum_pct[1:9], dtype=float)
+
+        mask = (d > 0.0) & np.isfinite(d) & np.isfinite(y)
+        d = d[mask]
+        y = y[mask]
+
+        if d.size < 2:
+            ax.set_title("Недостаточно точек для probit-графика")
+            ax.set_xlabel("log10(d), мкм" if use_log10_x else "d, мкм")
+            ax.set_ylabel("Probit = Φ⁻¹(p) + 5")
+            self.apply_default_style(ax)
+            self.redraw()
+            return ProbitLine(a=float("nan"), b=float("nan"), r2=float("nan"))
+
+        p = clip_prob(y / 100.0, eps=clip_eps)
+        probit = norm.ppf(p) + 5.0
+
+        if use_log10_x:
+            x = np.log10(d)
+            x_label = "log10(d), мкм"
+        else:
+            x = d
+            x_label = "d, мкм"
+
+        # Фит выполняем по исходным d и cum (%)
+        fit = fit_probit(d, y)
+
+        x_line = np.linspace(float(np.min(x)), float(np.max(x)), 200)
+        # Линия фит-предсказания в координате log10(d)
+        if use_log10_x:
+            y_line = fit.a * x_line + fit.b
+        else:
+            # Если вдруг рисуем по d, всё равно фит построен по log10(d),
+            # поэтому пересчитаем через log10(x_line)
+            y_line = fit.a * np.log10(np.maximum(x_line, 1e-12)) + fit.b
+
+        ax.plot(x, probit, marker="o", linestyle="None", label="Точки (probit)")
+        ax.plot(x_line, y_line, linestyle="--", label=f"Линия тренда (R²={fit.r2:.3f})")
+
+        ax.set_xlabel(x_label)
+        ax.set_ylabel("Probit = Φ⁻¹(p) + 5")
+        ax.set_title(title, wrap=True)
+        ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
+        ax.legend(loc="best")
+
+        self.redraw()
+        return fit
+
+    def plot_bar(
+        self,
+        centers_um: Sequence[float],
+        masses_ug: Sequence[float],
+        *,
+        title: str = "Распределение размеров частиц по массе",
+        xlabel: str = "Средний геометрический диаметр ступени, мкм",
+        ylabel: str = "Масса, мкг",
+        fmt_ticks: str = "{:.2f}",
+    ) -> None:
+        """
+        Рисует barplot: масса по бинам (центрам интервалов).
+
+        centers_um:
+            Центры интервалов (например, d_g = sqrt(d_low*d_high))
+        masses_ug:
+            Массы на ступенях.
+        """
+        ax = self.new_axes()
+
+        x = np.asarray(centers_um, dtype=float)
+        y = np.asarray(masses_ug, dtype=float)
+
+        mask = np.isfinite(x) & np.isfinite(y)
+        x = x[mask]
+        y = y[mask]
+
+        if x.size == 0:
+            ax.set_title("Нет данных для построения")
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(ylabel)
+            ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
+            self.redraw()
+            return
+
+        order = np.argsort(x)
+        x = x[order]
+        y = y[order]
+
+        x_pos = np.arange(x.size, dtype=int)
+        ax.bar(
+            x=x_pos,
+            height=y,
+            width=0.8,
+            align="center",
+            alpha=0.6,
+            edgecolor="black",
+        )
+
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels([fmt_ticks.format(v) for v in x])
+
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.set_title(title, wrap=True)
+        ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
+
+        self.redraw()
+
+    def plot_density(
+        self,
+        d_low_um: Sequence[float],
+        d_high_um: Sequence[float],
+        mass_ug: Sequence[float],
+        *,
+        title: str = "Массовая плотность по ln(d): эксперимент vs модель",
+        show_model: bool = True,
+        model_source: Optional[Tuple[np.ndarray, np.ndarray]] = None,
+    ) -> None:
+        """
+        Рисует плотность по ln(d) из интервалов ступеней:
+            g_i = (m_i/M) / Δln(d_i),
+            x_i = ln(d_g), d_g = sqrt(d_low*d_high), Δln = ln(d_high/d_low).
+
+        Опционально можно наложить модельную кривую:
+        - если show_model=True и model_source задан, то model_source=(diam_um, cum_pct)
+          и модель строится через probit-fit.
+
+        Parameters
+        ----------
+        d_low_um, d_high_um, mass_ug:
+            Интервалы и массы ступеней.
+        model_source:
+            (diam_um, cum_pct) для построения логнормальной модели через probit.
+        """
+        ax = self.new_axes()
+
+        d_low = np.asarray(d_low_um, dtype=float)
+        d_high = np.asarray(d_high_um, dtype=float)
+        m = np.asarray(mass_ug, dtype=float)
+
+        mask = (
+            np.isfinite(d_low)
+            & np.isfinite(d_high)
+            & np.isfinite(m)
+            & (d_low > 0.0)
+            & (d_high > 0.0)
+            & (d_high > d_low)
+        )
+        d_low = d_low[mask]
+        d_high = d_high[mask]
+        m = m[mask]
+
+        if m.size < 2:
+            ax.set_title("Недостаточно корректных интервалов для построения")
+            ax.set_xlabel("ln(d / µm)")
+            ax.set_ylabel("(m/M) / Δln(d)")
+            ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
+            self.redraw()
+            return
+
+        mass_total = float(np.sum(m))
+        if mass_total <= 0.0:
+            ax.set_title("Суммарная масса <= 0: невозможно нормировать")
+            ax.set_xlabel("ln(d / µm)")
+            ax.set_ylabel("(m/M) / Δln(d)")
+            ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
+            self.redraw()
+            return
+
+        dln = np.log(d_high / d_low)
+        d_g = np.sqrt(d_low * d_high)
+        x = np.log(d_g)
+
+        dens_norm = (m / mass_total) / dln
+
+        order = np.argsort(x)
+        x = x[order]
+        dens_norm = dens_norm[order]
+        dln = dln[order]
+
+        ax.bar(
+            x,
+            dens_norm,
+            width=dln,
+            align="center",
+            alpha=0.6,
+            edgecolor="black",
+            label="Эксперимент: (m/M)/Δln(d)",
+        )
+
+        # Модельная кривая (логнормаль), полученная из cumulative через probit
+        if show_model and model_source is not None:
+            diam_um, cum_pct = model_source
+            fit = fit_probit(
+                np.asarray(diam_um, dtype=float), np.asarray(cum_pct, dtype=float)
+            )
+
+            a = float(fit.a)
+            b = float(fit.b)
+
+            if a > 0.0 and np.isfinite(a) and np.isfinite(b):
+                sigma = float(np.log(10.0) / a)
+                mu = float(-(b - 5.0) * sigma)
+
+                x_grid = np.linspace(
+                    float(np.min(x)) - 0.25, float(np.max(x)) + 0.25, 400
+                )
+                model = (1.0 / (sigma * np.sqrt(2.0 * np.pi))) * np.exp(
+                    -0.5 * ((x_grid - mu) / sigma) ** 2
+                )
+                ax.plot(
+                    x_grid,
+                    model,
+                    linewidth=2.0,
+                    label=f"Логнормальная модель (R²={fit.r2:.3f})",
+                )
+
+        ax.set_xlabel("ln(d / µm)")
+        ax.set_ylabel("(m/M) / Δln(d)")
+        ax.set_title(title, wrap=True)
+        ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
+        ax.legend(loc="best")
+
+        self.redraw()
 
     def save_figure(self, filepath: str | Path, *, dpi: int = 300) -> None:
         """

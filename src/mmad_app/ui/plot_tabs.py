@@ -6,64 +6,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import List
 from pathlib import Path
 
 import numpy as np
 from PySide6.QtWidgets import QTabWidget, QVBoxLayout, QWidget
 
-from scipy.stats import norm
-
-from mmad_app.core.models import StageRecord
-from mmad_app.core.mmad import MmadResult
+from mmad_app.core.models import StageRecord, MmadResult
 from mmad_app.ui.plot_widget import PlotWidget
-
-
-@dataclass(frozen=True)
-class ProbitLine:
-    """Параметры линии пробит-регрессии: probit = a*log10(d) + b."""
-
-    a: float
-    b: float
-    r2: float
-
-
-def _safe_clip_prob(p: np.ndarray, eps: float = 1e-6) -> np.ndarray:
-    """Ограничение вероятностей, чтобы norm.ppf не дал +/-inf."""
-    return np.clip(p, eps, 1.0 - eps)
-
-
-def fit_probit(d_um: np.ndarray, cum_pct: np.ndarray) -> ProbitLine:
-    """
-    Оцениваем линейную модель для пробит-графика:
-        z = Phi^{-1}(p)
-        probit = z + 5
-        probit = a*log10(d) + b
-
-    Возвращает a, b и R^2.
-    """
-    x = np.asarray(d_um, dtype=float)
-    y = np.asarray(cum_pct, dtype=float)
-
-    mask = (x > 0.0) & np.isfinite(x) & np.isfinite(y)
-    x = x[mask]
-    y = y[mask]
-
-    p = _safe_clip_prob(y / 100.0)
-    z = norm.ppf(p)
-    probit = z + 5.0
-
-    lx = np.log10(x)
-
-    a, b = np.polyfit(lx, probit, deg=1)
-
-    y_hat = a * lx + b
-    ss_res = float(np.sum((probit - y_hat) ** 2))
-    ss_tot = float(np.sum((probit - float(np.mean(probit))) ** 2))
-    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 1.0
-
-    return ProbitLine(a=float(a), b=float(b), r2=float(r2))
 
 
 class PlotTabs(QWidget):
@@ -92,7 +42,6 @@ class PlotTabs(QWidget):
         self.tab_bar.plot_empty()
         self.tab_mass_density_distribution.plot_empty()
 
-
     def plot_all(self, records: List[StageRecord], result: MmadResult) -> None:
         """
         Рисует все графики
@@ -102,216 +51,35 @@ class PlotTabs(QWidget):
         self._plot_bar(records)
         self._plot_mass_density_distribution(records, result)
 
-
     def _plot_cumulative(self, result: MmadResult) -> None:
         """Обычный cumulative-график"""
         self.tab_cum.plot_cumulative(
             diam_um=result.diam_um,
             cum_pct=result.cum_undersize_pct,
-            mmad_um=result.mmad_um
+            mmad_um=result.mmad_um,
         )
 
     def _plot_log_probit(self, result: MmadResult) -> None:
-        """
-        Пробит-график:
-            X = log10(d)
-            Y = probit = norm.ppf(p) + 5
-        """
-        d = np.asarray(result.diam_um[1:9], dtype=float)
-        cum = np.asarray(result.cum_undersize_pct[1:9], dtype=float)
-
-        mask = d > 0.0
-        d = d[mask]
-        cum = cum[mask]
-
-        p = _safe_clip_prob(cum / 100.0)
-        probit = norm.ppf(p) + 5.0
-        lx = np.log10(d)
-
-        fit = fit_probit(d, cum)
-
-        lx_line = np.linspace(float(np.min(lx)), float(np.max(lx)), 200)
-        probit_line = fit.a * lx_line + fit.b
-
-        # Используем внутренний canvas PlotWidget: просто перерисуем "вручную"
-        fig = self.tab_probit._figure  # noqa: SLF001 (для простоты обучения)
-        canvas = self.tab_probit._canvas  # noqa: SLF001
-
-        fig.clear()
-        ax = fig.add_subplot(111)
-
-        ax.plot(lx, probit, marker="o", linestyle="None", label="Data (probit)")
-        ax.plot(lx_line, probit_line, linestyle="--", label=f"Fit (R²={fit.r2:.3f})")
-
-        ax.set_xlabel("log10(d), мкм")
-        ax.set_ylabel("Probit = Φ⁻¹(p) + 5")
-        ax.set_title("Лог-пробит распределение накопленной массы частиц аэрозоля по размерам", wrap=True)
-        ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
-        ax.legend(loc="best")
-
-        fig.tight_layout()
-        canvas.draw()
+        self.tab_probit.plot_probit(result.diam_um, result.cum_undersize_pct)
 
     def _plot_bar(self, records: List[StageRecord]) -> None:
-        """
-        Строит распределение массы по размерам через средние геометрические диаметры интервалов.
-        """
-        centers_um: List[float] = []
-        masses_ug: List[float] = []
-        labels: List[str] = []
+        centers = [np.sqrt(r.d_low * r.d_high) for r in records]
+        masses = [r.mass for r in records]
+        self.tab_bar.plot_bar(centers, masses)
 
-        for stage in records:
-            # Центр интервала по геометрическому среднему
-            d_g = float(np.sqrt(float(stage.d_low) * float(stage.d_high)))
-
-            # Масса по названию (если пользователь не ввёл — считаем 0)
-            m = float(stage.mass)
-
-            centers_um.append(d_g)
-            masses_ug.append(m)
-            labels.append(f"{d_g:g}")  # подпись тика = центр интервала
-
-            # 3) Упорядочивание по размеру
-            order = np.argsort(np.array(centers_um, dtype=float))
-            centers_um = [centers_um[i] for i in order]
-            masses_ug = [masses_ug[i] for i in order]
-            labels = [labels[i] for i in order]
-
-        # 4) Отрисовка
-        fig = self.tab_bar._figure  # noqa: SLF001
-        canvas = self.tab_bar._canvas  # noqa: SLF001
-
-        fig.clear()
-        ax = fig.add_subplot(111)
-        x_pos = np.arange(len(centers_um), dtype=int)
-        ax.bar(
-            x=x_pos,
-            height=np.array(masses_ug, dtype=float),
-            width=0.8,
-            align="center",
-            alpha=0.6,
-            edgecolor="black"
-            )
-        ax.set_xticks(x_pos)
-        formatted_labels = [f"{float(x):.2f}" for x in labels]
-        ax.set_xticklabels(formatted_labels)
-        ax.set_xlabel("Средний геометрический диаметр ступени, мкм")
-        ax.set_ylabel("Масса, мкг", loc="center")
-        ax.set_title("Распределение размеров частиц по массе", wrap=True)
-        ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
-        fig.tight_layout()
-        canvas.draw()
-
-    def _plot_mass_density_distribution(self,  records: List[StageRecord], result: MmadResult) -> None:
-
-        dg_list: List[float] = []
-        dln_list: List[float] = []
-        mass_list: List[float] = []
-
-        for stage in records:
-            d_low = float(stage.d_low)
-            d_high = float(stage.d_high)
-            m = float(stage.mass)
-
-            if d_low <= 0.0 or d_high <= 0.0 or d_high <= d_low:
-                continue
-
-            d_ln = float(np.log(d_high / d_low))
-            if d_ln <= 0.0:
-                continue
-
-            d_g = float(np.sqrt(d_low * d_high))
-
-            dg_list.append(d_g)
-            dln_list.append(d_ln)
-            mass_list.append(m)
-
-        fig = self.tab_mass_density_distribution._figure  # noqa: SLF001
-        canvas = self.tab_mass_density_distribution._canvas  # noqa: SLF001
-
-        fig.clear()
-        ax = fig.add_subplot(111)
-
-        if len(mass_list) < 2:
-            ax.set_title("Недостаточно корректных интервалов для построения графика")
-            ax.set_xlabel("ln(d / µm)")
-            ax.set_ylabel("(m/M) / Δln(d)")
-            ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
-            fig.tight_layout()
-            canvas.draw()
-            return
-
-        mass = np.array(mass_list, dtype=float)
-        mass_total = float(np.sum(mass))
-        if mass_total <= 0.0:
-            ax.set_title("Суммарная масса <= 0: невозможно нормировать")
-            ax.set_xlabel("ln(d / µm)")
-            ax.set_ylabel("(m/M) / Δln(d)")
-            ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
-            fig.tight_layout()
-            canvas.draw()
-            return
-
-        dg = np.array(dg_list, dtype=float)
-        dln = np.array(dln_list, dtype=float)
-
-        # Экспериментальная плотность по ln(d): интеграл ≈ 1
-        dens_norm = (mass / mass_total) / dln
-
-        # Координата по оси X
-        x = np.log(dg)
-
-        # Сортировка (важно: сортируем все массивы одинаково)
-        order = np.argsort(x)
-        x = x[order]
-        dens_norm = dens_norm[order]
-        dln = dln[order]
-
-        # --- 1) Эксперимент: столбцы шириной Δln(d) ---
-        ax.bar(
-            x,
-            dens_norm,
-            width=dln,
-            align="center",
-            alpha=0.6,
-            edgecolor="black",
-            label="Эксперимент: (m/M)/Δln(d)",
+    def _plot_mass_density_distribution(
+        self, records: List[StageRecord], result: MmadResult
+    ) -> None:
+        d_low = [r.d_low for r in records]
+        d_high = [r.d_high for r in records]
+        mass = [r.mass for r in records]
+        self.tab_mass_density_distribution.plot_density(
+            d_low,
+            d_high,
+            mass,
+            show_model=True,
+            model_source=(result.diam_um, result.cum_undersize_pct),
         )
-
-        # --- 2) Модель: логнормальная плотность по ln(d) из log–probit фита ---
-        # Берём параметры из cumulative (result), а не из интервалов
-        fit = fit_probit(result.diam_um, result.cum_undersize_pct)
-
-        # fit.a и fit.b относятся к probit = a*log10(d) + b, где probit = z + 5
-        a = float(fit.a)
-        b = float(fit.b)
-
-        if a > 0.0:
-            sigma = float(np.log(10.0) / a)
-            mu = float(-(b - 5.0) * sigma)
-
-            x_grid = np.linspace(float(np.min(x)) - 0.25, float(np.max(x)) + 0.25, 400)
-            # g(x) — плотность по ln(d) (интеграл = 1)
-            model = (1.0 / (sigma * np.sqrt(2.0 * np.pi))) * np.exp(
-                -0.5 * ((x_grid - mu) / sigma) ** 2
-            )
-
-            ax.plot(
-                x_grid,
-                model,
-                linewidth=2.0,
-                label=f"Логнормальная модель (R²={fit.r2:.3f})",
-            )
-
-        ax.set_xlabel("ln(d / µm)")
-        ax.set_ylabel("(m/M) / Δln(d)")
-        ax.set_title("Массовая плотность распределения размеров частиц", wrap=True)
-        ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
-        ax.legend(loc="best")
-
-        fig.tight_layout()
-        canvas.draw()
-
 
     def save_current_plot(self, filepath: str | Path, *, dpi: int = 300) -> None:
         """
@@ -321,8 +89,8 @@ class PlotTabs(QWidget):
 
         # current должен быть PlotWidget
         if hasattr(current, "save_figure"):
-            current.save_figure(filepath, dpi=dpi) # type: ignore
+            current.save_figure(filepath, dpi=dpi)  # type: ignore
         else:
-            raise TypeError("Текущая вкладка не является PlotWidget и не поддерживает сохранение.")
-
-        
+            raise TypeError(
+                "Текущая вкладка не является PlotWidget и не поддерживает сохранение."
+            )
