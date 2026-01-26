@@ -1,12 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 Главное окно приложения (QMainWindow).
-
-Содержит:
-- таблицу ввода ступеней
-- кнопки (Рассчитать, Очистить)
-- вывод MMAD
-- график (PlotWidget)
 """
 
 from __future__ import annotations
@@ -15,7 +9,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from typing import List, Optional
+from typing import List
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -28,7 +22,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QSplitter,
-    QFileDialog
+    QFileDialog,
 )
 
 from mmad_app.core.models import StageRecord
@@ -70,18 +64,19 @@ class MainWindow(QMainWindow):
         title.setStyleSheet("font-size: 16px; font-weight: 600;")
         left_layout.addWidget(title)
 
-        hint = QLabel(
-            "Распределение массы частиц аэрозоля по ступеням импактора\n"
-        )
+        hint = QLabel("Распределение массы частиц аэрозоля по ступеням импактора\n")
         hint.setWordWrap(True)
         left_layout.addWidget(hint)
 
         self.table = QTableWidget(8, 4)
         self.table.setHorizontalHeaderLabels(
-            ["Ступень", "dн, мкм", "dв, мкм", "Масса, мкг"])
+            ["Ступень", "dн, мкм", "dв, мкм", "Масса, мкг"]
+        )
         self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setSizePolicy(self.table.sizePolicy().horizontalPolicy(),
-                                 self.table.sizePolicy().verticalPolicy())
+        self.table.setSizePolicy(
+            self.table.sizePolicy().horizontalPolicy(),
+            self.table.sizePolicy().verticalPolicy(),
+        )
         left_layout.addWidget(self.table, stretch=1)
 
         self._fill_default_rows()
@@ -148,9 +143,10 @@ class MainWindow(QMainWindow):
         splitter.setSizes([480, 620])
 
         # Настройка минимальной ширины
-        left_panel.setMinimumWidth(400)
-        right_panel.setMinimumWidth(400)
+        left_panel.setMinimumWidth(600)
+        right_panel.setMinimumWidth(600)
 
+        self._last_result = None  # cохранение результатов после расчета
 
     def _fill_default_rows(self) -> None:
         """
@@ -164,25 +160,27 @@ class MainWindow(QMainWindow):
             ("Ступень 4", 2.1, 3.3),
             ("Ступень 5", 1.1, 2.1),
             ("Ступень 6", 0.65, 1.1),
-            ("Ступень 7", 0.43, 0.65)
+            ("Ступень 7", 0.43, 0.65),
         ]
 
         for row, (name, d50_bottom, d50_top) in enumerate(rows):
             self.table.setItem(row, 0, QTableWidgetItem(name))
             d50_bottom_item = QTableWidgetItem(f"{d50_bottom}")
-            d50_bottom_item.setTextAlignment(Qt.AlignmentFlag.AlignRight |
-                                      Qt.AlignmentFlag.AlignVCenter)
+            d50_bottom_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
             self.table.setItem(row, 1, d50_bottom_item)
             d50_top_item = QTableWidgetItem(f"{d50_top}")
-            d50_top_item.setTextAlignment(Qt.AlignmentFlag.AlignRight |
-                                      Qt.AlignmentFlag.AlignVCenter)
+            d50_top_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
             self.table.setItem(row, 2, d50_top_item)
 
             mass_item = QTableWidgetItem("")
-            mass_item.setTextAlignment(Qt.AlignmentFlag.AlignRight |
-                                       Qt.AlignmentFlag.AlignVCenter)
+            mass_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
             self.table.setItem(row, 3, mass_item)
-
 
     def on_clear(self) -> None:
         """Очищает числовые поля, сбрасывает результат и график."""
@@ -200,7 +198,6 @@ class MainWindow(QMainWindow):
         self.plot_tabs.tab_cum.plot_empty()
         self.plot_tabs.tab_probit.plot_empty()
         self.plot_tabs.tab_bar.plot_empty()
-
 
     def _read_records_from_table(self) -> List[StageRecord]:
         """
@@ -237,16 +234,17 @@ class MainWindow(QMainWindow):
 
         if not records:
             raise ValueError(
-                "Таблица пуста. Введите данные хотя бы для нескольких ступеней.")
+                "Таблица пуста. Введите данные хотя бы для нескольких ступеней."
+            )
 
         return records
-
 
     def on_calculate(self) -> None:
         """Считывает таблицу, считает MMAD, обновляет результат и график."""
         try:
             records = self._read_records_from_table()
             result = compute_mmad(records)
+            self._last_result = result
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Ошибка", str(exc))
             return
@@ -258,7 +256,6 @@ class MainWindow(QMainWindow):
         self.btn_save_current.setEnabled(True)
         self.btn_save_all.setEnabled(True)
 
-
     def on_fill_demo(self) -> None:
         """
         Заполняет таблицу тестовыми значениями.
@@ -268,13 +265,13 @@ class MainWindow(QMainWindow):
         # Запишем в таблицу построчно
         for row, mass_ug in enumerate(demo_data):
             mass_item = QTableWidgetItem(f"{mass_ug}")
-            mass_item.setTextAlignment(Qt.AlignmentFlag.AlignRight |
-                                       Qt.AlignmentFlag.AlignVCenter)
+            mass_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
             self.table.setItem(row, 3, mass_item)
 
         # После заполнения сразу считаем и рисуем
         self.on_calculate()
-
 
     def on_save_plot_clicked(self) -> None:
         """
@@ -293,7 +290,6 @@ class MainWindow(QMainWindow):
             self.plot_tabs.save_current_plot(filename, dpi=300)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Ошибка сохранения", str(exc))
-
 
     def save_all_plots(self, directory: str | Path, *, dpi: int = 300) -> None:
         """
@@ -322,12 +318,11 @@ class MainWindow(QMainWindow):
             path = out_dir / filename
 
             if hasattr(widget, "save_figure"):
-                widget.save_figure(path, dpi=dpi)
+                widget.save_figure(path, dpi=dpi)  # type: ignore
                 count_saved += 1
 
         if count_saved == 0:
             raise RuntimeError("Нет вкладок с графиками, поддерживающих сохранение.")
-
 
     def on_export_save_current_plot(self) -> None:
         """
@@ -348,7 +343,6 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить график:\n{exc}")
 
-
     def on_export_save_all_plots(self) -> None:
         """
         Сохраняет все вкладки с графиками в выбранную папку.
@@ -362,11 +356,12 @@ class MainWindow(QMainWindow):
         try:
             self.save_all_plots(directory, dpi=300)
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить графики:\n{exc}")
+            QMessageBox.critical(
+                self, "Ошибка", f"Не удалось сохранить графики:\n{exc}"
+            )
             return
 
         QMessageBox.information(self, "Готово", "Графики сохранены.")
-
 
     def on_export_csv(self) -> None:
         filename, _ = QFileDialog.getSaveFileName(
@@ -388,69 +383,51 @@ class MainWindow(QMainWindow):
 
             self._write_export_csv(Path(filename), records, result)
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "Ошибка", f"Не удалось экспортировать CSV:\n{exc}")
+            QMessageBox.critical(
+                self, "Ошибка", f"Не удалось экспортировать CSV:\n{exc}"
+            )
             return
 
         QMessageBox.information(self, "Готово", "CSV успешно сохранён.")
 
-
     def _write_export_csv(
-        self,
-        path: Path,
-        records: List["StageRecord"],
-        result
+        self, path: Path, records: List["StageRecord"], result
     ) -> None:
         """
-        Записывает CSV:
-        1) Секция метрик (если result не None)
-        2) Секция таблицы ступеней
+        Сохранение исходных данных и результатов расчета в CSV:
         """
         path.parent.mkdir(parents=True, exist_ok=True)
 
         with path.open("w", newline="", encoding="utf-8") as f:
             w = csv.writer(f, delimiter=";")
 
-            # 1) Метрики
-            w.writerow(["# META"])
-            if result is None:
-                w.writerow(["message", "Результаты не рассчитаны"])
-            else:
-                # Пишем только ключевые поля. Добавьте/уберите по вкусу.
-                w.writerow(["mmad_um", f"{result.mmad_um:.6g}"])
-                w.writerow(["gsd", f"{result.gsd:.6g}"])
-                w.writerow(["d10_um", f"{result.d10_um:.6g}"])
-                if hasattr(result, "d16_um"):
-                    w.writerow(["d16_um", f"{result.d16_um:.6g}"])
-                if hasattr(result, "d84_um"):
-                    w.writerow(["d84_um", f"{result.d84_um:.6g}"])
-                w.writerow(["d90_um", f"{result.d90_um:.6g}"])
-                w.writerow(["span", f"{result.span:.6g}"])
-                w.writerow(["fpf_cutoff_um", f"{result.fpf_cutoff_um:.6g}"])
-                w.writerow(["fpf_pct", f"{result.fpf_pct:.6g}"])
-                w.writerow(["total_mass_ug", f"{result.total_mass_ug:.6g}"])
-
-                # Доп. поля (если вы добавили)
-                for name in ("log_mean_um", "mass_mean_um", "modal_um"):
-                    if hasattr(result, name):
-                        val = getattr(result, name)
-                        try:
-                            w.writerow([name, f"{float(val):.6g}"])
-                        except Exception:
-                            w.writerow([name, ""])
-
-            w.writerow([])
-
-            # ----------------
-            # 2) Таблица ступеней
-            # ----------------
-            w.writerow(["# TABLE"])
-            w.writerow(["stage_name", "d_low_um", "d_high_um", "mass_ug"])
+            # 1) Исходные данные
+            w.writerow(["# Исходные данные"])
+            w.writerow(["Ступень", "dн, мкм", "dв, мкм", "Масса, мкг"])
 
             for r in records:
-                # Подстройте под ваши реальные поля StageRecord
-                stage_name = getattr(r, "stage_name", "")
+                stage_name = getattr(r, "name", "")
                 d_low = getattr(r, "d_low", "")
                 d_high = getattr(r, "d_high", "")
                 mass = getattr(r, "mass", "")
 
                 w.writerow([stage_name, d_low, d_high, mass])
+
+            # 2) Результаты расчета
+            w.writerow(["# Результаты расчета"])
+            if result is None:
+                w.writerow(["message", "Результаты не рассчитаны"])
+            else:
+                w.writerow(["MMAD (d50), мкм", f"{result.mmad_um:.2g}"])
+                w.writerow(["GSD", f"{result.gsd:.2g}"])
+                w.writerow(["d10, мкм", f"{result.d10_um:.2g}"])
+                w.writerow(["d16, мкм", f"{result.d16_um:.2g}"])
+                w.writerow(["d84, мкм", f"{result.d84_um:.2g}"])
+                w.writerow(["d90, мкм", f"{result.d90_um:.2g}"])
+                w.writerow(["Span", f"{result.span:.2g}"])
+                w.writerow(["FPF (< 5 мкм), %", f"{result.fpf_pct:.2g}"])
+                w.writerow(["Лог. средний диаметр, мкм, %", f"{result.log_mean_um:.2g}"])
+                w.writerow(["Среднемассовый диаметр, мкм", f"{result.mass_mean_um:.2g}"])
+                w.writerow(["Модальный диаметр, мкм", f"{result.modal_um:.2g}"])
+
+            w.writerow([])

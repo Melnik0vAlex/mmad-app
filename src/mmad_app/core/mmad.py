@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Iterable, List, Tuple
 import numpy as np
-from scipy.stats import norm
 
 from mmad_app.core.models import StageRecord, MmadResult
 

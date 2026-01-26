@@ -3,6 +3,7 @@
 Модели данных для каскадного импактора.
 
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ class StageRecord:
     mass_ug:
         Масса (мкг), осаждённая на данной ступени.
     """
+
     name: str
     d_high: float
     d_low: float
@@ -55,9 +57,8 @@ class MmadResult:
 
 
 @dataclass(frozen=True)
-class ProbitFitResult:
-    """Параметры пробит-регрессии."""
-
+class ProbitLine:
+    """Параметры линии пробит-регрессии: probit = a*log10(d) + b."""
     a: float
     b: float
-    r2: float
+    rmse: float
