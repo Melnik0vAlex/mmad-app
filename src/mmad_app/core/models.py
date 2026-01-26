@@ -61,4 +61,4 @@ class ProbitLine:
     """Параметры линии пробит-регрессии: probit = a*log10(d) + b."""
     a: float
     b: float
-    r2: float
+    rmse: float

@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+ # -*- coding: utf-8 -*-
 # src/mmad_app/core/probit.py
 """Пробит-аппроксимация кумулятивной кривой (S-кривая) для APSD."""
 
@@ -43,13 +43,12 @@ def fit_probit(diam_um: np.ndarray, cum_pct: np.ndarray) -> ProbitLine:
     # Линейная аппроксимация probit = a*lx + b
     a, b = np.polyfit(lx, probit, deg=1)
 
-    # R^2 для качества подгонки
-    z_hat = a * lx + b
-    ss_res = float(np.sum((z - z_hat) ** 2))
-    ss_tot = float(np.sum((z - float(np.mean(z))) ** 2))
-    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 1.0
+    # RMSE для качества подгонки
+    probit_hat = a * lx + b
 
-    return ProbitLine(a=float(a), b=float(b), r2=float(r2))
+    rmse = float(np.sqrt(np.mean((probit - probit_hat) ** 2)))
+
+    return ProbitLine(a=float(a), b=float(b), rmse=float(rmse))
 
 
 def predict_cumulative_from_probit(

@@ -43,29 +43,31 @@ class PlotTabs(QWidget):
         self.tab_mass_density_distribution.plot_empty()
 
     def plot_all(self, records: List[StageRecord], result: MmadResult) -> None:
-        """
-        Рисует все графики
-        """
         self._plot_cumulative(result)
         self._plot_log_probit(result)
         self._plot_bar(records)
         self._plot_mass_density_distribution(records, result)
 
     def _plot_cumulative(self, result: MmadResult) -> None:
-        """Обычный cumulative-график"""
         self.tab_cum.plot_cumulative(
-            diam_um=result.diam_um,
-            cum_pct=result.cum_undersize_pct,
-            mmad_um=result.mmad_um,
+            result.diam_um,
+            result.cum_undersize_pct,
+            result.mmad_um
         )
 
     def _plot_log_probit(self, result: MmadResult) -> None:
-        self.tab_probit.plot_probit(result.diam_um, result.cum_undersize_pct)
+        self.tab_probit.plot_probit(
+            result.diam_um,
+            result.cum_undersize_pct
+        )
 
     def _plot_bar(self, records: List[StageRecord]) -> None:
         centers = [np.sqrt(r.d_low * r.d_high) for r in records]
         masses = [r.mass for r in records]
-        self.tab_bar.plot_bar(centers, masses)
+        self.tab_bar.plot_bar(
+            centers,
+            masses
+        )
 
     def _plot_mass_density_distribution(
         self, records: List[StageRecord], result: MmadResult
@@ -82,9 +84,6 @@ class PlotTabs(QWidget):
         )
 
     def save_current_plot(self, filepath: str | Path, *, dpi: int = 300) -> None:
-        """
-        Сохраняет график с текущей вкладки в файл.
-        """
         current = self.tabs.currentWidget()
 
         # current должен быть PlotWidget

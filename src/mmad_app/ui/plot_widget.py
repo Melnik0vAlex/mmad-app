@@ -159,13 +159,13 @@ class PlotWidget(QWidget):
         else:
             _annotate_hline(84.0, "84%")
 
-        # 7) Вертикали: MMAD (+ опционально d16/d84)
+        # 7) Вертикали: MMAD
         ax.axvline(
             mmad_um,
             linestyle="--",
             linewidth=1.4,
             color="red",
-            label=f"MMAD = {mmad_um:.2f} µm",
+            label=f"MMAD = {mmad_um:.2f} мкм",
         )
 
         if d16_um is not None and np.isfinite(float(d16_um)) and float(d16_um) > 0.0:
@@ -209,8 +209,8 @@ class PlotWidget(QWidget):
         """
         ax = self.new_axes()
 
-        d = np.asarray(diam_um[1:9], dtype=float)
-        y = np.asarray(cum_pct[1:9], dtype=float)
+        d = np.asarray(diam_um[2:8], dtype=float)
+        y = np.asarray(cum_pct[2:8], dtype=float)
 
         mask = (d > 0.0) & np.isfinite(d) & np.isfinite(y)
         d = d[mask]
@@ -222,7 +222,7 @@ class PlotWidget(QWidget):
             ax.set_ylabel("Probit = Φ⁻¹(p) + 5")
             self.apply_default_style(ax)
             self.redraw()
-            return ProbitLine(a=float("nan"), b=float("nan"), r2=float("nan"))
+            return ProbitLine(a=float("nan"), b=float("nan"), rmse=float("nan"))
 
         p = clip_prob(y / 100.0, eps=clip_eps)
         probit = norm.ppf(p) + 5.0
@@ -242,18 +242,35 @@ class PlotWidget(QWidget):
         if use_log10_x:
             y_line = fit.a * x_line + fit.b
         else:
-            # Если вдруг рисуем по d, всё равно фит построен по log10(d),
-            # поэтому пересчитаем через log10(x_line)
+            # Если рисуем по d, всё равно фит построен по log10(d),
+            # поэтому пересчtn через log10(x_line)
             y_line = fit.a * np.log10(np.maximum(x_line, 1e-12)) + fit.b
 
-        ax.plot(x, probit, marker="o", linestyle="None", label="Точки (probit)")
-        ax.plot(x_line, y_line, linestyle="--", label=f"Линия тренда (R²={fit.r2:.3f})")
+        ax.plot(
+            x,
+            probit,
+            linestyle="None",
+            marker="s",
+            markersize=6,
+            markerfacecolor="orange",
+            markeredgecolor="black",
+            markeredgewidth=0.8,
+            linewidth=1.6,
+            label="Экспериментальные значения",
+        )
+        ax.plot(
+            x_line,
+            y_line,
+            linestyle="--",
+            color="tab:blue",
+            label=f"Линейная аппроксимация (RMSE = {fit.rmse:.2f})",
+        )
 
         ax.set_xlabel(x_label)
         ax.set_ylabel("Probit = Φ⁻¹(p) + 5")
         ax.set_title(title, wrap=True)
-        ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
-        ax.legend(loc="best")
+        ax.grid(True, which="major", linestyle=":", linewidth=0.8, alpha=0.6)
+        ax.legend(loc="lower right", frameon=True)
 
         self.redraw()
         return fit
@@ -268,14 +285,7 @@ class PlotWidget(QWidget):
         ylabel: str = "Масса, мкг",
         fmt_ticks: str = "{:.2f}",
     ) -> None:
-        """
-        Рисует barplot: масса по бинам (центрам интервалов).
-
-        centers_um:
-            Центры интервалов (например, d_g = sqrt(d_low*d_high))
-        masses_ug:
-            Массы на ступенях.
-        """
+        """Рисует barplot: масса по бинам (центрам интервалов)."""
         ax = self.new_axes()
 
         x = np.asarray(centers_um, dtype=float)
@@ -323,7 +333,7 @@ class PlotWidget(QWidget):
         d_high_um: Sequence[float],
         mass_ug: Sequence[float],
         *,
-        title: str = "Массовая плотность по ln(d): эксперимент vs модель",
+        title: str = "Дифференциальное массовое распределение по логарифму диаметра",
         show_model: bool = True,
         model_source: Optional[Tuple[np.ndarray, np.ndarray]] = None,
     ) -> None:
@@ -331,10 +341,6 @@ class PlotWidget(QWidget):
         Рисует плотность по ln(d) из интервалов ступеней:
             g_i = (m_i/M) / Δln(d_i),
             x_i = ln(d_g), d_g = sqrt(d_low*d_high), Δln = ln(d_high/d_low).
-
-        Опционально можно наложить модельную кривую:
-        - если show_model=True и model_source задан, то model_source=(diam_um, cum_pct)
-          и модель строится через probit-fit.
 
         Parameters
         ----------
@@ -396,10 +402,10 @@ class PlotWidget(QWidget):
             align="center",
             alpha=0.6,
             edgecolor="black",
-            label="Эксперимент: (m/M)/Δln(d)",
+            label="Экспериментальные данные",
         )
 
-        # Модельная кривая (логнормаль), полученная из cumulative через probit
+        # Логнормальной модель, восстановленная из log–probit аппроксимации накопленного распределения
         if show_model and model_source is not None:
             diam_um, cum_pct = model_source
             fit = fit_probit(
@@ -423,11 +429,13 @@ class PlotWidget(QWidget):
                     x_grid,
                     model,
                     linewidth=2.0,
-                    label=f"Логнормальная модель (R²={fit.r2:.3f})",
+                    label=f"Логнормальная аппроксимация (RMSE = {fit.rmse:.2f})"
                 )
 
-        ax.set_xlabel("ln(d / µm)")
-        ax.set_ylabel("(m/M) / Δln(d)")
+        # Ось X: натуральный логарифм аэродинамического диаметра частиц
+        ax.set_xlabel("ln(d)")
+        # Ось Y: нормированная массовая плотность распределения по логарифму диаметра
+        ax.set_ylabel("(Δm/M) / Δln(d)")
         ax.set_title(title, wrap=True)
         ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
         ax.legend(loc="best")
