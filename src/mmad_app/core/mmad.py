@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+# src/mmad_app/core/mmad.py
 from __future__ import annotations
 
 from typing import Iterable, List, Tuple
@@ -7,6 +9,9 @@ from mmad_app.core.models import StageRecord, MmadResult
 
 
 def _validate_records(records: List[StageRecord]) -> None:
+    """
+    Валидация исходных данных
+    """
     if len(records) < 3:
         raise ValueError("Необходимо минимум 3 заполненные ступени для расчета.")
 
@@ -29,10 +34,35 @@ def _validate_records(records: List[StageRecord]) -> None:
 
 
 def compute_cumulative_undersize(
-        records: Iterable[StageRecord],
+    records: Iterable[StageRecord],
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Строит кумулятивную зависимость cumulative undersize (%) от диаметра (µm).
+    Формирует накопительную кривую накопленной доли массы частиц (< d).
+
+    Для каждой ступени каскадного импактора cumulative undersize
+    определяется как доля массы частиц с аэродинамическим диаметром
+    меньше отсечного диаметра данной ступени.
+
+    Алгоритм:
+    1. Ступени сортируются по отсечному диаметру (от крупных к мелким).
+    2. Для каждого отсечного диаметра d_i вычисляется:
+           F(d_i) = Σ_{j > i} m_j / Σ m * 100 %,
+       где m_j — масса, осевшая на более мелких ступенях.
+    3. Добавляется граничная точка для крупных частиц: F(d_top) = 100 %.
+    4. Данные упорядочиваются по возрастанию диаметра и очищаются от дубликатов.
+
+    Параметры
+    ---------
+    records:
+        Итератор записей ступеней импактора. Для каждой записи
+        должны быть заданы нижний отсечной диаметр и масса.
+
+    Возвращает
+    ----------
+    Tuple[np.ndarray, np.ndarray]
+        Два массива одинаковой длины:
+        - diam_um : диаметры (мкм),
+        - cum_undersize_pct : накопленная доля массы частиц с диаметром < d, %.
     """
     res_list = list(records)
     _validate_records(res_list)
@@ -40,20 +70,22 @@ def compute_cumulative_undersize(
     # Сортировка отсечных диаметров D50 (сверху крупные, снизу мелкие)
     res_sorted = sorted(res_list, key=lambda r: r.d_low, reverse=True)
 
-    d50 = np.array([r.d_low for r in res_sorted], dtype=float)
+    d_cut = np.array([r.d_low for r in res_sorted], dtype=float)
     mass = np.array([r.mass for r in res_sorted], dtype=float)
 
     total = float(np.sum(mass))
+    if total <= 0.0:
+        raise ValueError("Суммарная масса должна быть > 0.")
 
     cum_at_d50 = np.array(
-        [100 * float(np.sum(mass[i + 1 :]))/ total for i in range(len(mass))],
+        [100 * float(np.sum(mass[i + 1 :])) / total for i in range(len(mass))],
         dtype=float,
     )
 
     # Граничные условия для графика и интерполяции
     d_top = 10.0
 
-    diam = np.concatenate((d50, [d_top])).astype(float)
+    diam = np.concatenate((d_cut, [d_top])).astype(float)
     cum = np.concatenate((cum_at_d50, [100.0])).astype(float)
 
     # Упорядочивание по возрастанию диаметра
@@ -83,13 +115,34 @@ def interpolate_d_at_cum_pct_logx(
     target_pct: float,
 ) -> float:
     """
-    Находит диаметр d, при котором cumulative undersize = target_pct.
+    Находит диаметр, соответствующий заданной накопленной доле массы (< d).
 
-    Интерполяция:
-    - линейная по y (процент)
-    - по x используем log10(d), чтобы корректнее работать с размерными шкалами
+    Интерполяция выполняется:
+    - линейно по оси Y (проценты),
+    - по оси X в логарифмической координате log10(d).
+
+    Параметры
+    ---------
+    diam_um:
+        Диаметры (мкм) для накопительной кривой. Используются только значения > 0.
+    cum_pct:
+        Накопленная доля массы частиц с диаметром < d, %.
+    target_pct:
+        Целевой уровень кумулятивы в процентах (0 < target_pct < 100).
+
+    Возвращает
+    ----------
+    float
+        Диаметр d (мкм), для которого F(d) = target_pct (с log-интерполяцией).
+
+    Исключения
+    ----------
+    ValueError
+        Если target_pct вне (0, 100), недостаточно точек для интерполяции,
+        или target_pct вне диапазона заданной кумулятивной кривой.
     """
-    if not (0.0 < target_pct < 100.0):
+    # Проверка корректности целевого процента
+    if not 0.0 < target_pct < 100.0:
         raise ValueError("target_pct должен быть в (0, 100).")
 
     mask = diam_um > 0.0
@@ -99,33 +152,44 @@ def interpolate_d_at_cum_pct_logx(
     if x.size < 2:
         raise ValueError("Недостаточно точек с положительным диаметром.")
 
+    # Сортировка пары (x, y) по возрастанию диаметра x
     idx = np.argsort(x)
     x = x[idx]
     y = y[idx]
 
-    # обеспечим монотонность по y
+    # Накопительная кривая должна возрастать.
     y = np.maximum.accumulate(y)
 
+    # Проверка что target_pct лежит в диапазоне доступных значений
     y_min = float(np.min(y))
     y_max = float(np.max(y))
-    if not (y_min <= target_pct <= y_max):
+    if not y_min <= target_pct <= y_max:
         raise ValueError(
             f"target_pct={target_pct} вне диапазона кривой [{y_min:.2f}, {y_max:.2f}]."
         )
 
+    # Нахождение индекса k первого значения y[k], которое >= target_pct
     k = int(np.searchsorted(y, target_pct, side="left"))
     if k == 0:
+        # target_pct совпал/ниже первой точки
         return float(x[0])
     if k >= len(y):
+        # target_pct выше последней точки
         return float(x[-1])
 
+    # Опорные точки для интерполяции
     x0, x1 = float(x[k - 1]), float(x[k])
     y0, y1 = float(y[k - 1]), float(y[k])
 
+    # Если y не меняется, возвращается левая граница
     if y1 == y0:
         return float(x0)
 
+    # Доля прохождения по Y от y0 к y1
     t = (target_pct - y0) / (y1 - y0)
+
+    # Интерполяция по логарифму диаметра:
+    # log10(d) меняется линейно, затем возвращение к d через 10**(...)
     lx0 = float(np.log10(x0))
     lx1 = float(np.log10(x1))
     lxt = lx0 + t * (lx1 - lx0)
@@ -139,31 +203,50 @@ def interpolate_cum_pct_at_d_logx(
     d_um: float,
 ) -> float:
     """
-    Находит cumulative undersize (%) при заданном диаметре d_um.
+    Определяет накопленную долю массы частиц с диаметром меньше заданного.
 
-    Интерполяция:
-    - по оси X используем log10(d)
-    - по оси Y интерполируем линейно
+    Функция вычисляет значение cumulative undersize F(d) (в процентах)
+    при заданном аэродинамическом диаметре d, используя интерполяцию
+    в логарифмической координате диаметра.
 
-    Важно:
-    - d_um должен быть > 0 (для log10)
-    - если d_um вне диапазона X, используем "clamp" к границам
+    Интерполяция выполняется:
+    - по оси X в координате log10(d),
+    - по оси Y линейно (по процентам).
+
+    Параметры
+    ---------
+    diam_um:
+        Диаметры (мкм), соответствующие точкам накопительной кривой.
+        Используются только значения d > 0.
+    cum_pct:
+        Накопленная доля массы частиц с диаметром < d, выраженная в процентах.
+    d_um:
+        Аэродинамический диаметр (мкм), для которого требуется определить
+        накопленную долю массы.
+
+    Возвращает
+    ----------
+    float
+        Накопленная доля массы частиц с диаметром < d_um, выраженная в процентах.
+
     """
     if d_um <= 0.0:
         return 0.0
 
-    mask = diam_um > 0.0
+    mask = (diam_um > 0.0) & np.isfinite(diam_um) & np.isfinite(cum_pct)
     x = diam_um[mask].astype(float)
     y = cum_pct[mask].astype(float)
 
     if x.size < 2:
-        raise ValueError("Недостаточно точек с положительным диаметром для интерполяции.")
+        raise ValueError(
+            "Недостаточно точек с положительным диаметром для интерполяции."
+        )
 
     idx = np.argsort(x)
     x = x[idx]
     y = y[idx]
 
-    # Кумулятива должна быть неубывающей
+    # Накопителньая кривая должна возрастать
     y = np.maximum.accumulate(y)
 
     # Clamp по X
@@ -172,7 +255,7 @@ def interpolate_cum_pct_at_d_logx(
     if d_um >= float(x[-1]):
         return float(y[-1])
 
-    # Находим интервал по X
+    # Интервал по X
     k = int(np.searchsorted(x, d_um, side="left"))
     if k == 0:
         return float(y[0])
@@ -196,69 +279,94 @@ def interpolate_cum_pct_at_d_logx(
 
 def compute_mmad(records: Iterable[StageRecord]) -> MmadResult:
     """
-    Полный расчёт метрик APSD (массовое распределение по аэродинамическому диаметру).
+    Выполняет расчёт основных метрик APSD по данным каскадного импактора.
 
-    Считаем:
-    1) Кумулятивную кривую cumulative undersize (%): F(d)
-    2) Квантили распределения: d10, d16, d50 (MMAD), d84, d90
-       (d16 и d84 — это 16% и 84% кумулятивы; иногда вместо 15.87/84.13)
-    3) GSD по "нормальным" квантилям 15.87/84.13:
-          GSD = sqrt(d84.13 / d15.87)
-    4) Span = (d90 - d10) / d50
-    5) FPF(<5 µm) по умолчанию
-    6) Доп. диаметры по интервалам (используем границы ступеней):
-       - Логарифмический средний диаметр (геометрическое среднее):
+    Функция строит накопленную массовую долю частиц с диаметром меньше заданного
+    (cumulative undersize) и извлекает из неё квантильные диаметры, а также
+    вычисляет дополнительные характеристики распределения.
+
+    Этапы расчёта
+    -------------
+    1. Построение накопительной кривой F(d), %:
+       F(d) — накопленная доля массы частиц с аэродинамическим диаметром < d,
+       выраженная в процентах.
+
+    2. Расчёт квантильных диаметров по накопительной кривой:
+       - d10, d16, d50 (MMAD), d84, d90.
+
+    3. Расчёт GSD по «нормальным» квантилям (±1σ в пробит-подходе):
+       - d15.87 и d84.13,
+       - GSD = sqrt(d84.13 / d15.87).
+
+    4. Расчёт ширины распределения (Span):
+       - Span = (d90 - d10) / d50.
+
+    5. Расчёт FPF (Fine Particle Fraction) для заданного порога d_cut
+       (по умолчанию 5 мкм):
+       - FPF(<d_cut) = F(d_cut), %.
+
+    6. Дополнительные диаметры по интервалам ступеней (если доступны d_low/d_high):
+       Для каждой ступени используется репрезентативный диаметр интервала:
+           d_i = sqrt(d_low * d_high).
+
+       На их основе вычисляются:
+       - логарифмический средний диаметр (геометрическое среднее по массе):
              d_g = exp(Σ w_i ln(d_i))
-       - Среднемассовый диаметр (массо-взвешенный арифметический):
-             d_mass = Σ w_i d_i
-       - Модальный аэродинамический диаметр (мода по интервалам):
-             d_mode = d_i, где w_i максимально
+       - среднемассовый диаметр (массо-взвешенное арифметическое среднее):
+             d_m = Σ w_i d_i
+       - модальный аэродинамический диаметр:
+             d_mode = d_i, для которого w_i максимально
 
-    Где w_i = m_i / Σ m_i, а d_i — репрезентативный диаметр интервала ступени:
-       d_i = sqrt(d_low * d_high) (средний геометрический диаметр интервала).
+       где w_i = m_i / Σ m_i — массовые доли.
+
+    Параметры
+    ---------
+    records:
+        Итератор записей ступеней. Должны быть заданы массы, а для расчёта
+        дополнительных средних/моды — границы интервалов d_low и d_high.
+
+    Возвращает
+    ----------
+    MmadResult
+        Структура с рассчитанными метриками и данными накопительной кривой
+        для построения графиков.
     """
     rec_list = list(records)
-    diam_um, cum_pct = compute_cumulative_undersize(rec_list)
+    diam, cum_pct = compute_cumulative_undersize(rec_list)
 
     # Суммарная масса
-    total_mass_ug = float(sum(float(r.mass) for r in rec_list))
-    if total_mass_ug <= 0.0:
+    total_mass = float(sum(float(r.mass) for r in rec_list))
+    if total_mass <= 0.0:
         raise ValueError("Суммарная масса должна быть > 0.")
 
-    # -----------------------------
-    # 1) Квантили по кумулятиве
-    # -----------------------------
-    mmad_um = interpolate_d_at_cum_pct_logx(diam_um, cum_pct, target_pct=50.0)
+    # Квантили по накопительной кривой
+    mmad = interpolate_d_at_cum_pct_logx(diam, cum_pct, target_pct=50.0)
 
     # "Инженерные" квантили 16/84
-    d16_um = interpolate_d_at_cum_pct_logx(diam_um, cum_pct, target_pct=16.0)
-    d84_um = interpolate_d_at_cum_pct_logx(diam_um, cum_pct, target_pct=84.0)
+    d16 = interpolate_d_at_cum_pct_logx(diam, cum_pct, target_pct=16.0)
+    d84 = interpolate_d_at_cum_pct_logx(diam, cum_pct, target_pct=84.0)
 
     # "Нормальные" квантили для GSD
-    d15_87_um = interpolate_d_at_cum_pct_logx(diam_um, cum_pct, target_pct=15.87)
-    d84_13_um = interpolate_d_at_cum_pct_logx(diam_um, cum_pct, target_pct=84.13)
+    d15_87 = interpolate_d_at_cum_pct_logx(diam, cum_pct, target_pct=15.87)
+    d84_13 = interpolate_d_at_cum_pct_logx(diam, cum_pct, target_pct=84.13)
 
-    if d15_87_um <= 0.0:
+    if d15_87 <= 0.0:
         raise ValueError("d15.87 получился <= 0, невозможно вычислить GSD.")
-    gsd = float(np.sqrt(d84_13_um / d15_87_um))
+    gsd = float(np.sqrt(d84_13 / d15_87))
 
     # D10/D90 и Span
-    d10_um = interpolate_d_at_cum_pct_logx(diam_um, cum_pct, target_pct=10.0)
-    d90_um = interpolate_d_at_cum_pct_logx(diam_um, cum_pct, target_pct=90.0)
+    d10 = interpolate_d_at_cum_pct_logx(diam[1:7], cum_pct[1:7], target_pct=10.0)
+    d90 = interpolate_d_at_cum_pct_logx(diam[1:7], cum_pct[1:7], target_pct=90.0)
 
-    if mmad_um <= 0.0:
+    if mmad <= 0.0:
         raise ValueError("MMAD получился <= 0, невозможно вычислить Span.")
-    span = float((d90_um - d10_um) / mmad_um)
+    span = float((d90 - d10) / mmad)
 
-    # FPF для порога 5 µm
+    # FPF для порога 5 мкм
     fpf_cutoff_um = 5.0
-    fpf_pct = interpolate_cum_pct_at_d_logx(diam_um, cum_pct, d_um=fpf_cutoff_um)
+    fpf_pct = interpolate_cum_pct_at_d_logx(diam, cum_pct, d_um=fpf_cutoff_um)
 
-    # ---------------------------------------------------
-    # 2) Массо-взвешенные средние и мода по интервалам
-    # ---------------------------------------------------
-    # Важно: эти величины считаем по интервалам ступеней, а не по кумулятиве.
-    # Для каждой ступени нужен d_low, d_high и масса.
+    # Массо-взвешенные средние и мода по интервалам ступеней
     dg_bins: List[float] = []
     w_bins: List[float] = []
 
@@ -267,7 +375,7 @@ def compute_mmad(records: Iterable[StageRecord]) -> MmadResult:
         d_high = float(getattr(r, "d_high", 0.0))
         m = float(getattr(r, "mass", 0.0))
 
-        # Пропускаем некорректные интервалы и нулевую массу
+        # Пропуск некорректных интервалов и нулевой массы
         if m <= 0.0:
             continue
         if d_low <= 0.0 or d_high <= 0.0 or d_high <= d_low:
@@ -276,12 +384,12 @@ def compute_mmad(records: Iterable[StageRecord]) -> MmadResult:
         # Репрезентативный диаметр интервала: геометрический центр
         d_bin = float(np.sqrt(d_low * d_high))
         dg_bins.append(d_bin)
-        w_bins.append(m / total_mass_ug)
+        w_bins.append(m / total_mass)
 
     # Значения по умолчанию, если не удалось собрать интервалы
-    log_mean_um = float("nan")
-    mass_mean_um = float("nan")
-    modal_um = float("nan")
+    log_mean = float("nan")
+    mass_mean = float("nan")
+    modal = float("nan")
 
     if dg_bins:
         d_arr = np.array(dg_bins, dtype=float)
@@ -292,36 +400,31 @@ def compute_mmad(records: Iterable[StageRecord]) -> MmadResult:
         if w_sum > 0.0:
             w_arr = w_arr / w_sum
 
-        # Логарифмический средний диаметр (геометрическое среднее)
-        # d_g = exp(Σ w_i ln(d_i))
-        log_mean_um = float(np.exp(np.sum(w_arr * np.log(d_arr))))
+        # Логарифмический средний диаметр
+        log_mean = float(np.exp(np.sum(w_arr * np.log(d_arr))))
 
-        # Среднемассовый (массо-взвешенный арифметический) диаметр
-        # d_mass = Σ w_i d_i
-        mass_mean_um = float(np.sum(w_arr * d_arr))
+        # Среднемассовый диаметр
+        mass_mean = float(np.sum(w_arr * d_arr))
 
-        # Модальный диаметр (диаметр интервала с максимальной долей массы)
-        modal_um = float(d_arr[int(np.argmax(w_arr))])
+        # Модальный диаметр
+        modal = float(d_arr[int(np.argmax(w_arr))])
 
-    # ---------------------------------------------------
-    # 3) Возвращаем результат (добавьте поля в MmadResult)
-    # ---------------------------------------------------
     return MmadResult(
-        mmad_um=float(mmad_um),
+        mmad=float(mmad),
         gsd=float(gsd),
-        d10_um=float(d10_um),
-        d16_um=float(d16_um),
-        d84_um=float(d84_um),
-        d90_um=float(d90_um),
-        d15_87_um=float(d15_87_um),
-        d84_13_um=float(d84_13_um),
+        d10=float(d10),
+        d16=float(d16),
+        d84=float(d84),
+        d90=float(d90),
+        d15_87=float(d15_87),
+        d84_13=float(d84_13),
         span=float(span),
         fpf_cutoff_um=float(fpf_cutoff_um),
         fpf_pct=float(fpf_pct),
-        total_mass_ug=float(total_mass_ug),
-        log_mean_um=float(log_mean_um),
-        mass_mean_um=float(mass_mean_um),
-        modal_um=float(modal_um),
-        diam_um=diam_um,
+        total_mass=float(total_mass),
+        log_mean=float(log_mean),
+        mass_mean=float(mass_mean),
+        modal=float(modal),
+        diam_um=diam,
         cum_undersize_pct=cum_pct,
     )

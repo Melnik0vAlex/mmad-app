@@ -38,18 +38,12 @@ class PlotWidget(QWidget):
         self.plot_empty()
 
     def new_axes(self) -> Axes:
-        """
-        Очищает фигуру и возвращает новую ось (subplot 1x1).
-
-        """
+        """Очищает фигуру и возвращает новую ось (subplot 1x1)."""
         self._figure.clear()
         return self._figure.add_subplot(111)
 
     def redraw(self, *, tight: bool = True) -> None:
-        """
-        Перерисовывает canvas.
-
-        """
+        """Перерисовывает canvas."""
         if tight:
             self._figure.tight_layout()
         self._canvas.draw()
@@ -64,14 +58,53 @@ class PlotWidget(QWidget):
         ax.grid(True, which="major", linestyle="-", linewidth=0.8, alpha=0.6)
         ax.grid(True, which="minor", linestyle=":", linewidth=0.6, alpha=0.5)
 
-    def plot_empty(self) -> None:
-        """Рисует пустой шаблон графика."""
+    def plot_empty(
+        self,
+        *,
+        title: str = "Нет данных",
+        xlabel: str = "",
+        ylabel: str = "",
+        xlim: Optional[Tuple[float, float]] = None,
+        ylim: Optional[Tuple[float, float]] = None,
+        grid: bool = True,
+        use_default_style: bool = False,
+    ) -> None:
+        """
+        Универсальная "заглушка" для всех графиков.
+
+        Параметры
+        ---------
+        title:
+            Заголовок графика.
+        xlabel, ylabel:
+            Подписи осей.
+        xlim, ylim:
+            Пределы осей (если None — matplotlib выберет автоматически).
+        grid:
+            Отрисовка сетки.
+        use_default_style:
+            Стиль по умолчанию (тики/сетка).
+        """
         ax = self.new_axes()
-        ax.set_xlabel("dв, мкм")
-        ax.set_ylabel("Накопительная масса < dв, %")
-        ax.set_ylim(0, 100)
-        ax.set_xlim(0, 10)
-        self.apply_default_style(ax)
+
+        if title:
+            ax.set_title(title, wrap=True)
+        if xlabel:
+            ax.set_xlabel(xlabel)
+        if ylabel:
+            ax.set_ylabel(ylabel)
+
+        if xlim is not None:
+            ax.set_xlim(*xlim)
+        if ylim is not None:
+            ax.set_ylim(*ylim)
+
+        if use_default_style:
+            self.apply_default_style(ax)
+
+        if grid:
+            ax.grid(True, which="major", linestyle=":", linewidth=0.8, alpha=0.6)
+
         self.redraw()
 
     def plot_cumulative(
@@ -83,7 +116,29 @@ class PlotWidget(QWidget):
         d16_um: float | None = None,
         d84_um: float | None = None,
     ) -> None:
-        """Кумулятивная кривая (cumulative undersize)."""
+        """
+        Отрисовывает накопленную массовую долю частиц с диаметром меньше d.
+
+        Параметры
+        ---------
+        diam_um:
+            Массив диаметров (мкм), соответствующих точкам кумулятивной кривой.
+            Для корректного отображения ожидаются значения > 0 и без NaN/inf.
+        cum_pct:
+            Массив значений F(d) в процентах (0..100), той же длины что diam_um.
+        mmad_um:
+            Диаметр MMAD (d50) в мкм, используется для вертикальной линии.
+        d16_um:
+            Диаметр d16 (16-й процентиль по массе), мкм. Если None, линия не рисуется.
+        d84_um:
+            Диаметр d84 (84-й процентиль по массе), мкм. Если None, линия не рисуется.
+
+        Возвращает
+        ----------
+        None
+            Функция обновляет содержимое matplotlib-холста внутри виджета.
+
+        """
         ax = self.new_axes()
 
         # 1) Основная кривая
@@ -100,7 +155,8 @@ class PlotWidget(QWidget):
         )
 
         ax.set_title(
-            "Накопительная кривая массового распределения по аэродинамическому диаметру",
+            "Накопительная кривая массового распределения "
+            "по аэродинамическому диаметру",
             wrap=True,
         )
         ax.set_xlabel("Аэродинамический диаметр, мкм")
@@ -194,25 +250,38 @@ class PlotWidget(QWidget):
         clip_eps: float = 1e-6,
     ) -> ProbitLine:
         """
-        Рисует log–probit график и линию регрессии.
+        Отрисовывает log–probit график накопленного массового распределения.
 
-        Parameters
-        ----------
+        Параметры
+        ---------
         diam_um:
-            Диаметры (мкм), x > 0.
+            Аэродинамические диаметры частиц, мкм. Используются только значения d > 0.
         cum_pct:
-            Кумулятив (%).
+            Накопленная доля массы частиц с диаметром < d, выраженная в процентах.
         use_log10_x:
-            Если True, X = log10(d). Иначе X = d (не рекомендуется для probit).
+            Если True, ось X задаётся как log10(d).
         clip_eps:
-            Ограничение p, чтобы избежать +/-inf.
+            Малое положительное число для ограничения вероятностей p в диапазоне
+            (clip_eps, 1 − clip_eps) с целью предотвращения ±∞ при вычислении Φ⁻¹(p).
+
+        Возвращает
+        ----------
+        ProbitLine
+            Параметры пробит-линейной аппроксимации.
         """
         ax = self.new_axes()
 
-        d = np.asarray(diam_um[2:8], dtype=float)
-        y = np.asarray(cum_pct[2:8], dtype=float)
+        d = np.asarray(diam_um, dtype=float)
+        y = np.asarray(cum_pct, dtype=float)
 
-        mask = (d > 0.0) & np.isfinite(d) & np.isfinite(y)
+        mask = (
+            np.isfinite(d)
+            & np.isfinite(y)
+            & (d > 0.0)
+            & (y > 0.0)
+            & (y < 100.0)
+        )
+
         d = d[mask]
         y = y[mask]
 
@@ -243,7 +312,6 @@ class PlotWidget(QWidget):
             y_line = fit.a * x_line + fit.b
         else:
             # Если рисуем по d, всё равно фит построен по log10(d),
-            # поэтому пересчtn через log10(x_line)
             y_line = fit.a * np.log10(np.maximum(x_line, 1e-12)) + fit.b
 
         ax.plot(
@@ -323,7 +391,7 @@ class PlotWidget(QWidget):
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         ax.set_title(title, wrap=True)
-        ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
+        ax.grid(True, which="major", linestyle=":", linewidth=0.8, alpha=0.6)
 
         self.redraw()
 
@@ -338,16 +406,31 @@ class PlotWidget(QWidget):
         model_source: Optional[Tuple[np.ndarray, np.ndarray]] = None,
     ) -> None:
         """
-        Рисует плотность по ln(d) из интервалов ступеней:
-            g_i = (m_i/M) / Δln(d_i),
-            x_i = ln(d_g), d_g = sqrt(d_low*d_high), Δln = ln(d_high/d_low).
+        Отрисовывает дифференциальное массовое распределение по ln(d).
 
-        Parameters
-        ----------
-        d_low_um, d_high_um, mass_ug:
-            Интервалы и массы ступеней.
+        Поверх экспериментальных столбцов наносится логнормальная
+        аппроксимация, восстановленная из лог-пробит подгонки накопленного
+        распределения F(d) (cumulative undersize).
+
+        Параметры
+        ---------
+        d_low_um, d_high_um:
+            Нижняя и верхняя границы интервалов ступеней (мкм).
+        mass_ug:
+            Массы, соответствующие интервалам (мкг).
+        title:
+            Заголовок графика.
+        show_model:
+            Если True и задан model_source, отображает логнормальную модель.
         model_source:
-            (diam_um, cum_pct) для построения логнормальной модели через probit.
+            Пара (diam_um, cum_pct) для подгонки лог-пробит и восстановления
+            параметров логнормальной модели. diam_um в мкм, cum_pct в %.
+
+        Возвращает
+        ----------
+        None
+            Функция обновляет содержимое matplotlib-холста внутри виджета.
+
         """
         ax = self.new_axes()
 
@@ -355,6 +438,7 @@ class PlotWidget(QWidget):
         d_high = np.asarray(d_high_um, dtype=float)
         m = np.asarray(mass_ug, dtype=float)
 
+        # Фильтрация входных данных
         mask = (
             np.isfinite(d_low)
             & np.isfinite(d_high)
@@ -367,6 +451,7 @@ class PlotWidget(QWidget):
         d_high = d_high[mask]
         m = m[mask]
 
+        # Проверка интервалов и суммарной массы
         if m.size < 2:
             ax.set_title("Недостаточно корректных интервалов для построения")
             ax.set_xlabel("ln(d / µm)")
@@ -384,6 +469,7 @@ class PlotWidget(QWidget):
             self.redraw()
             return
 
+        # Построение экспериментальной плотности по ln(d)
         dln = np.log(d_high / d_low)
         d_g = np.sqrt(d_low * d_high)
         x = np.log(d_g)
@@ -405,11 +491,13 @@ class PlotWidget(QWidget):
             label="Экспериментальные данные",
         )
 
-        # Логнормальной модель, восстановленная из log–probit аппроксимации накопленного распределения
+        # Логнормальной модель, восстановленная из log–probit аппроксимации
+        # накопленного распределения
         if show_model and model_source is not None:
             diam_um, cum_pct = model_source
             fit = fit_probit(
-                np.asarray(diam_um, dtype=float), np.asarray(cum_pct, dtype=float)
+                np.asarray(diam_um, dtype=float),
+                np.asarray(cum_pct, dtype=float),
             )
 
             a = float(fit.a)
@@ -429,7 +517,8 @@ class PlotWidget(QWidget):
                     x_grid,
                     model,
                     linewidth=2.0,
-                    label=f"Логнормальная аппроксимация (RMSE = {fit.rmse:.2f})"
+                    label=f"Логнормальная аппроксимация"
+                        rf" ($\mu={mu:.2f}$, $\sigma={sigma:.2f}$, RMSE={fit.rmse:.2f})"
                 )
 
         # Ось X: натуральный логарифм аэродинамического диаметра частиц
@@ -437,7 +526,7 @@ class PlotWidget(QWidget):
         # Ось Y: нормированная массовая плотность распределения по логарифму диаметра
         ax.set_ylabel("(Δm/M) / Δln(d)")
         ax.set_title(title, wrap=True)
-        ax.grid(True, which="both", linestyle=":", linewidth=0.8, alpha=0.6)
+        ax.grid(True, which="major", linestyle=":", linewidth=0.8, alpha=0.6)
         ax.legend(loc="best")
 
         self.redraw()
@@ -446,8 +535,8 @@ class PlotWidget(QWidget):
         """
         Сохраняет текущую фигуру matplotlib в файл.
 
-        Parameters
-        ----------
+        Параметры
+        ---------
         filepath:
             Путь к файлу (например: "plot.png", "plot.pdf").
         dpi:

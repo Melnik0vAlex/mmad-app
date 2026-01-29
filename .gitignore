@@ -11,6 +11,8 @@ __pycache__/
 env/
 venv/
 .venv/
+.build/
+build/
 node_modules/
 dist/
 dist-ssr/

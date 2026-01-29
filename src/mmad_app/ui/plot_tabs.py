@@ -50,24 +50,16 @@ class PlotTabs(QWidget):
 
     def _plot_cumulative(self, result: MmadResult) -> None:
         self.tab_cum.plot_cumulative(
-            result.diam_um,
-            result.cum_undersize_pct,
-            result.mmad_um
+            result.diam_um, result.cum_undersize_pct, result.mmad
         )
 
     def _plot_log_probit(self, result: MmadResult) -> None:
-        self.tab_probit.plot_probit(
-            result.diam_um,
-            result.cum_undersize_pct
-        )
+        self.tab_probit.plot_probit(result.diam_um, result.cum_undersize_pct)
 
     def _plot_bar(self, records: List[StageRecord]) -> None:
         centers = [np.sqrt(r.d_low * r.d_high) for r in records]
         masses = [r.mass for r in records]
-        self.tab_bar.plot_bar(
-            centers,
-            masses
-        )
+        self.tab_bar.plot_bar(centers, masses)
 
     def _plot_mass_density_distribution(
         self, records: List[StageRecord], result: MmadResult

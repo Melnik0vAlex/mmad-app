@@ -195,9 +195,35 @@ class MainWindow(QMainWindow):
 
         self.results_panel.clear()
 
-        self.plot_tabs.tab_cum.plot_empty()
-        self.plot_tabs.tab_probit.plot_empty()
-        self.plot_tabs.tab_bar.plot_empty()
+        self.plot_tabs.tab_cum.plot_empty(
+            title="Накопительная кривая массового распределения "
+            "по аэродинамическому диаметру",
+            xlabel="Аэродинамический диаметр, мкм",
+            ylabel="Накопленная масса < dв, %",
+            xlim=(0.0, 10.0),
+            ylim=(0, 100),
+        )
+        self.plot_tabs.tab_probit.plot_empty(
+            title="Лог-пробит распределение накопленной массы",
+            xlabel="log10(d), мкм",
+            ylabel="Probit = Φ⁻¹(p) + 5",
+            xlim=(0.0, 10.0),
+            ylim=(0, 8),
+        )
+        self.plot_tabs.tab_bar.plot_empty(
+            title="Распределение размеров частиц по массе",
+            xlabel="Средний геометрический диаметр ступени, мкм",
+            ylabel="Масса, мкг",
+            xlim=(0.0, 10.0),
+            ylim=(0.0, 1.0),
+        )
+        self.plot_tabs.tab_mass_density_distribution.plot_empty(
+            title="Дифференциальное массовое распределение по логарифму диаметра",
+            xlabel="ln(d)",
+            ylabel="(Δm/M) / Δln(d)",
+            xlim=(0.0, 2.5),
+            ylim=(0.0, 1.0),
+        )
 
     def _read_records_from_table(self) -> List[StageRecord]:
         """
@@ -262,7 +288,7 @@ class MainWindow(QMainWindow):
         """
         demo_data = (0.0034, 0.0115, 0.0233, 0.0582, 0.0408, 0.0140, 0.0015, 0.0000)
 
-        # Запишем в таблицу построчно
+        # Запись в таблицу построчно
         for row, mass_ug in enumerate(demo_data):
             mass_item = QTableWidgetItem(f"{mass_ug}")
             mass_item.setTextAlignment(
@@ -338,7 +364,6 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            # Вы добавляли ранее метод save_current_plot(...)
             self.plot_tabs.save_current_plot(filename, dpi=300)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить график:\n{exc}")
@@ -375,10 +400,6 @@ class MainWindow(QMainWindow):
 
         try:
             records = self._read_records_from_table()
-
-            # Важно: у вас должен быть сохранён последний результат.
-            # Например, после расчёта:
-            # self._last_result = result
             result = getattr(self, "_last_result", None)
 
             self._write_export_csv(Path(filename), records, result)
@@ -418,16 +439,16 @@ class MainWindow(QMainWindow):
             if result is None:
                 w.writerow(["message", "Результаты не рассчитаны"])
             else:
-                w.writerow(["MMAD (d50), мкм", f"{result.mmad_um:.2g}"])
+                w.writerow(["MMAD (d50), мкм", f"{result.mmad:.2g}"])
                 w.writerow(["GSD", f"{result.gsd:.2g}"])
-                w.writerow(["d10, мкм", f"{result.d10_um:.2g}"])
-                w.writerow(["d16, мкм", f"{result.d16_um:.2g}"])
-                w.writerow(["d84, мкм", f"{result.d84_um:.2g}"])
-                w.writerow(["d90, мкм", f"{result.d90_um:.2g}"])
+                w.writerow(["d10, мкм", f"{result.d10:.2g}"])
+                w.writerow(["d16, мкм", f"{result.d16:.2g}"])
+                w.writerow(["d84, мкм", f"{result.d84:.2g}"])
+                w.writerow(["d90, мкм", f"{result.d90:.2g}"])
                 w.writerow(["Span", f"{result.span:.2g}"])
                 w.writerow(["FPF (< 5 мкм), %", f"{result.fpf_pct:.2g}"])
-                w.writerow(["Лог. средний диаметр, мкм, %", f"{result.log_mean_um:.2g}"])
-                w.writerow(["Среднемассовый диаметр, мкм", f"{result.mass_mean_um:.2g}"])
-                w.writerow(["Модальный диаметр, мкм", f"{result.modal_um:.2g}"])
+                w.writerow(["Лог. средний диаметр, мкм, %", f"{result.log_mean:.2g}"])
+                w.writerow(["Среднемассовый диаметр, мкм", f"{result.mass_mean:.2g}"])
+                w.writerow(["Модальный диаметр, мкм", f"{result.modal:.2g}"])
 
             w.writerow([])
