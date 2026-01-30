@@ -7,6 +7,9 @@ from __future__ import annotations
 
 
 import csv
+import sqlite3
+import numpy as np
+
 from pathlib import Path
 
 from typing import List
@@ -23,12 +26,17 @@ from PySide6.QtWidgets import (
     QWidget,
     QSplitter,
     QFileDialog,
+    QLineEdit,
+    QTabWidget,
 )
 
-from mmad_app.core.models import StageRecord
-from mmad_app.core.mmad import compute_mmad
+from mmad_app.core.models import StageRecord, MmadResult
+from mmad_app.core.mmad import compute_mmad, compute_cumulative_undersize
+from mmad_app.db.repo import save_run, load_run, connect
+from mmad_app.db.path import get_db_path
 from mmad_app.ui.plot_tabs import PlotTabs
 from mmad_app.ui.result_panel import ResultsPanel
+from mmad_app.ui.db_panel import DbHistoryPanel
 
 
 class MainWindow(QMainWindow):
@@ -36,6 +44,11 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
+        self._db_conn: sqlite3.Connection = connect(str(get_db_path()))
+
+        self.init_ui()
+
+    def init_ui(self):
 
         self.setWindowTitle("MMAD калькулятор")
         self.resize(1200, 800)
@@ -47,13 +60,22 @@ class MainWindow(QMainWindow):
         main_layout = QHBoxLayout(central)
         main_layout.setContentsMargins(8, 8, 8, 8)
 
+        # Разделение интерфейса
+        self.tabs = QTabWidget()
+        # Растягивания названия вкладок на всю ширину
+        self.tabs.tabBar().setExpanding(True)
+        self.tabs.setUsesScrollButtons(False)
+        main_layout.addWidget(self.tabs)
+
+        page_calculate = QWidget()
+        calc_layout = QHBoxLayout()
+
         # QSplitter по горизонтали
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)  # панели не схлопываются в "ноль"
         splitter.setHandleWidth(8)
 
-        main_layout.addWidget(splitter)
-
+        calc_layout.addWidget(splitter)
         # QSplitter принимает ТОЛЬКО QWidget
         # Левая панель: исходные данные
         left_panel = QWidget()
@@ -62,7 +84,9 @@ class MainWindow(QMainWindow):
 
         title = QLabel("Исходные данные")
         title.setStyleSheet("font-size: 16px; font-weight: 600;")
-        left_layout.addWidget(title)
+
+        self.sample_code_edit = QLineEdit()
+        left_layout.addWidget(self.sample_code_edit)
 
         hint = QLabel("Распределение массы частиц аэрозоля по ступеням импактора\n")
         hint.setWordWrap(True)
@@ -110,25 +134,30 @@ class MainWindow(QMainWindow):
         self.results_panel = ResultsPanel()
         right_layout.addWidget(self.results_panel)
 
+        # Вкладки графиков
         self.plot_tabs = PlotTabs()
         right_layout.addWidget(self.plot_tabs)
 
         # Кнопки под графиком
         self.btn_plot_row = QHBoxLayout()
 
-        self.btn_save_current = QPushButton("Сохранить")
+        self.btn_save_current = QPushButton("Сохранить график")
         self.btn_save_all = QPushButton("Сохранить все графики…")
+        self.btn_save_db = QPushButton("Сохранить в БД…")
         self.btn_export_csv = QPushButton("Экспорт CSV…")
 
         self.btn_export_csv.setEnabled(False)
+        self.btn_save_db.setEnabled(False)
         self.btn_save_current.setEnabled(False)
         self.btn_save_all.setEnabled(False)
 
         self.btn_save_current.clicked.connect(self.on_export_save_current_plot)
+        self.btn_save_db.clicked.connect(self.on_save_db)
         self.btn_save_all.clicked.connect(self.on_export_save_all_plots)
         self.btn_export_csv.clicked.connect(self.on_export_csv)
 
         self.btn_plot_row.addWidget(self.btn_save_current)
+        self.btn_plot_row.addWidget(self.btn_save_db)
         self.btn_plot_row.addWidget(self.btn_save_all)
         self.btn_plot_row.addWidget(self.btn_export_csv)
         self.btn_plot_row.addStretch(1)
@@ -146,7 +175,21 @@ class MainWindow(QMainWindow):
         left_panel.setMinimumWidth(600)
         right_panel.setMinimumWidth(600)
 
+        page_calculate.setLayout(calc_layout)
+        self.tabs.addTab(page_calculate, "Новый расчет")
+
+        page_db = QWidget()
+        self.db_panel = DbHistoryPanel(self._db_conn, parent=page_db)
+        layout = QVBoxLayout(page_db)
+        layout.addWidget(self.db_panel)
+        self.db_panel.btn_load.clicked.connect(self.on_load_run_from_db)
+
+        # Первичная загрузка
+        self.db_panel.reload()
+        self.tabs.addTab(page_db, "База данных")
+
         self._last_result = None  # cохранение результатов после расчета
+        self._last_records = None
 
     def _fill_default_rows(self) -> None:
         """
@@ -270,17 +313,23 @@ class MainWindow(QMainWindow):
         try:
             records = self._read_records_from_table()
             result = compute_mmad(records)
+
+            # Для последующего сохранения в БД/экспорта
+            self._last_records = records
             self._last_result = result
+
+            # Обновляем интерфейс
+            self.results_panel.set_result(result)
+            self.plot_tabs.plot_all(records=records, result=result)
+
+            self.btn_export_csv.setEnabled(True)
+            self.btn_save_current.setEnabled(True)
+            self.btn_save_all.setEnabled(True)
+            self.btn_save_db.setEnabled(True)
+
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Ошибка", str(exc))
             return
-
-        self.results_panel.set_result(result)
-        self.plot_tabs.plot_all(records=records, result=result)
-
-        self.btn_export_csv.setEnabled(True)
-        self.btn_save_current.setEnabled(True)
-        self.btn_save_all.setEnabled(True)
 
     def on_fill_demo(self) -> None:
         """
@@ -452,3 +501,134 @@ class MainWindow(QMainWindow):
                 w.writerow(["Модальный диаметр, мкм", f"{result.modal:.2g}"])
 
             w.writerow([])
+
+    def on_save_db(self) -> None:
+        """
+        Сохраняет последний рассчитанный результат и исходные данные в SQLite.
+
+        """
+        try:
+            sample_code = self.sample_code_edit.text().strip()
+            if not sample_code:
+                raise ValueError("Введите шифр пробы перед сохранением в БД.")
+
+            records = getattr(self, "_last_records", None)
+            result = getattr(self, "_last_result", None)
+
+            if records is None or result is None:
+                raise ValueError(
+                    "Сначала выполните расчёт, затем сохраните результат в БД."
+                )
+
+            run_id = save_run(
+                self._db_conn,
+                sample_code=sample_code,
+                records=records,
+                result=result,
+                notes=None,
+            )
+
+            QMessageBox.information(
+                self, "Готово", f"Результат сохранён в БД (ID={run_id})."
+            )
+
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Ошибка", str(exc))
+
+    def on_load_run_from_db(self, run_id: int) -> None:
+        """Загружает сохранённый расчёт из SQLite и отображает его в интерфейсе."""
+        try:
+            run_row, stage_rows = load_run(self._db_conn, run_id)
+
+            # Шифр пробы
+            if hasattr(self, "sample_code_edit") and self.sample_code_edit is not None:
+                self.sample_code_edit.setText(str(run_row["sample_code"]))
+
+            # Заполннение таблицы исходных данных
+            self.table.setRowCount(len(stage_rows))
+
+            records: list[StageRecord] = []
+
+            for row_idx, s in enumerate(stage_rows):
+                stage_name = str(s["stage_name"])
+                d_low = float(s["d_low"])
+                d_high = float(s["d_high"])
+                mass = float(s["mass"])
+
+                # Таблица: названия/значения
+                self.table.setItem(row_idx, 0, QTableWidgetItem(stage_name))
+
+                low_item = QTableWidgetItem(f"{d_low:g}")
+                low_item.setTextAlignment(
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                )
+                self.table.setItem(row_idx, 1, low_item)
+
+                high_item = QTableWidgetItem(f"{d_high:g}")
+                high_item.setTextAlignment(
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                )
+                self.table.setItem(row_idx, 2, high_item)
+
+                mass_item = QTableWidgetItem(f"{mass:g}")
+                mass_item.setTextAlignment(
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                )
+                self.table.setItem(row_idx, 3, mass_item)
+
+                records.append(
+                    StageRecord(
+                        name=stage_name,
+                        d_low=d_low,
+                        d_high=d_high,
+                        mass=mass,
+                    )
+                )
+
+            # 3) Формирование MmadResult из runs (без пересчёта)
+            result = MmadResult(
+                mmad=float(run_row["mmad_um"]),
+                gsd=float(run_row["gsd"]),
+                d10=float(run_row["d10_um"]),
+                d16=float(run_row["d16_um"]),
+                d84=float(run_row["d84_um"]),
+                d90=float(run_row["d90_um"]),
+                d15_87=float(run_row["d15_87_um"]),
+                d84_13=float(run_row["d84_13_um"]),
+                span=float(run_row["span"]),
+                fpf_cutoff_um=float(run_row["fpf_cutoff_um"]),
+                fpf_pct=float(run_row["fpf_pct"]),
+                total_mass=float(run_row["total_mass_ug"]),
+                log_mean=float(run_row["log_mean"]),
+                mass_mean=float(run_row["mass_mean_um"]),
+                modal=float(run_row["modal_um"]),
+                diam_um=np.array([], dtype=float),
+                cum_undersize_pct=np.array([], dtype=float),
+            )
+
+            # Пересчtn кумулятивной кривой для графиков
+            diam_um, cum_pct = compute_cumulative_undersize(records)
+
+            # "дозаполняем" result для графиков
+            result = MmadResult(
+                **{
+                    **result.__dict__,
+                    "diam_um": diam_um,
+                    "cum_undersize_pct": cum_pct,
+                }
+            )
+
+            # Сохраняем "последние" значения (для экспорта/сохранения)
+            self._last_records = records
+            self._last_result = result
+
+            # Обновление UI: карточка + графики
+            self.results_panel.set_result(result)
+            self.plot_tabs.plot_all(records=records, result=result)
+
+            # Переключимся на вкладку "Новый расчёт"
+            if hasattr(self, "tabs"):
+                self.tabs.setCurrentIndex(0)
+
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Ошибка загрузки", str(exc))
