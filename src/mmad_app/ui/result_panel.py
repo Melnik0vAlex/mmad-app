@@ -23,6 +23,9 @@ class ResultsPanel(QGroupBox):
         self._layout.setVerticalSpacing(6)
 
         self.lbl_mmad = self._add_row("MMAD (d50), мкм")
+        self.lbl_log_mean = self._add_row("LMD, мкм")
+        self.lbl_mass_mean = self._add_row("MMD, мкм")
+        self.lbl_modal = self._add_row("mod, мкм")
         self.lbl_gsd = self._add_row("GSD")
         self.lbl_d10 = self._add_row("d10, мкм")
         self.lbl_d16 = self._add_row("d16, мкм")
@@ -30,9 +33,6 @@ class ResultsPanel(QGroupBox):
         self.lbl_d90 = self._add_row("d90, мкм")
         self.lbl_span = self._add_row("Span")
         self.lbl_fpf = self._add_row("FPF (< 5 мкм), %")
-        self.lbl_log_mean = self._add_row("Лог. средний диаметр, мкм")
-        self.lbl_mass_mean = self._add_row("Среднемассовый диаметр, мкм")
-        self.lbl_modal = self._add_row("Модальный диаметр, мкм")
 
         self.clear()
 

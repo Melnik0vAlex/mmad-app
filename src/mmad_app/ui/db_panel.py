@@ -27,13 +27,21 @@ from mmad_app.db.repo import delete_run, list_runs
 
 @dataclass(frozen=True)
 class RunRow:
-    """Упрощённое представление записи из таблицы runs для отображения в UI."""
+    """Представление записи из таблицы runs для отображения в UI."""
 
     run_id: int
     created_at: str
     sample_code: str
     mmad: float
+    lmd: float
+    mmd: float
+    mod: float
     gsd: float
+    d10: float
+    d16: float
+    d84: float
+    d90: float
+    span: float
     fpf_pct: float
 
 
@@ -79,9 +87,24 @@ class DbHistoryPanel(QWidget):
         top.addWidget(self.btn_delete)
 
         # ---- Таблица ----
-        self.table = QTableWidget(0, 6)
+        self.table = QTableWidget(0, 14)
         self.table.setHorizontalHeaderLabels(
-            ["ID", "Дата", "Шифр пробы", "MMAD, µm", "GSD", "FPF, %"]
+            [
+                "ID",
+                "Дата",
+                "Шифр пробы",
+                "MMAD, мкм",
+                "LMD, мкм",
+                "MMD, мкм",
+                "mod, мкм",
+                "GSD",
+                "d10, мкм",
+                "d16, мкм",
+                "d84, мкм",
+                "d90, мкм",
+                "Span",
+                "FPF, %",
+            ]
         )
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -116,14 +139,21 @@ class DbHistoryPanel(QWidget):
                 created_at=str(r["created_at"]),
                 sample_code=str(r["sample_code"]),
                 mmad=float(r["mmad"]),
+                lmd=float(r["log_mean"]),
+                mmd=float(r["mass_mean"]),
+                mod=float(r["modal"]),
                 gsd=float(r["gsd"]),
+                d10=float(r["d10"]),
+                d16=float(r["d16"]),
+                d84=float(r["d84"]),
+                d90=float(r["d90"]),
+                span=float(r["span"]),
                 fpf_pct=float(r["fpf_pct"]),
             )
             for r in rows
         ]
 
         self._render_table(self._rows)
-
 
     # Внутреннее: отрисовка таблицы
     def _render_table(self, rows: List[RunRow]) -> None:
@@ -132,24 +162,20 @@ class DbHistoryPanel(QWidget):
 
         for row_idx, r in enumerate(rows):
             self.table.insertRow(row_idx)
-
-            # ID
             self._set_item(row_idx, 0, str(r.run_id), align_right=True)
-
-            # Дата
             self._set_item(row_idx, 1, r.created_at)
-
-            # Шифр пробы
             self._set_item(row_idx, 2, r.sample_code)
-
-            # MMAD
-            self._set_item(row_idx, 3, f"{r.mmad:.3f}", align_right=True)
-
-            # GSD
-            self._set_item(row_idx, 4, f"{r.gsd:.3f}", align_right=True)
-
-            # FPF
-            self._set_item(row_idx, 5, f"{r.fpf_pct:.2f}", align_right=True)
+            self._set_item(row_idx, 3, f"{r.mmad:.2f}", align_right=True)
+            self._set_item(row_idx, 4, f"{r.lmd:.2f}", align_right=True)
+            self._set_item(row_idx, 5, f"{r.mmd:.2f}", align_right=True)
+            self._set_item(row_idx, 6, f"{r.mod:.2f}", align_right=True)
+            self._set_item(row_idx, 7, f"{r.gsd:.2f}", align_right=True)
+            self._set_item(row_idx, 8, f"{r.d10:.2f}", align_right=True)
+            self._set_item(row_idx, 9, f"{r.d16:.2f}", align_right=True)
+            self._set_item(row_idx, 10, f"{r.d84:.2f}", align_right=True)
+            self._set_item(row_idx, 11, f"{r.d90:.2f}", align_right=True)
+            self._set_item(row_idx, 12, f"{r.span:.2f}", align_right=True)
+            self._set_item(row_idx, 13, f"{r.fpf_pct:.2f}", align_right=True)
 
         self.table.resizeColumnsToContents()
         self._on_selection_changed()
@@ -193,7 +219,9 @@ class DbHistoryPanel(QWidget):
         except ValueError:
             return None
 
-    def _on_double_click_row(self, row: int, col: int) -> None:
+    def _on_double_click_row(
+        self, row: int, col: int  # pylint: disable=unused-argument
+    ) -> None:
         """Двойной клик по строке — загрузить."""
         run_id = self._get_selected_run_id()
         if run_id is not None:
@@ -233,8 +261,6 @@ class DbHistoryPanel(QWidget):
     def _apply_filter(self, text: str) -> None:
         """
         Фильтрует таблицу по sample_code (простая подстрока, без SQL).
-
-        Реализовано на уровне UI: скрываем строки, которые не подходят.
         """
         query = (text or "").strip().lower()
 

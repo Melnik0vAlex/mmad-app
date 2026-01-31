@@ -4,15 +4,13 @@
 """
 
 from __future__ import annotations
-
-
+from dataclasses import replace
+from pathlib import Path
+from typing import List
+from typing import Optional
 import csv
 import sqlite3
 import numpy as np
-
-from pathlib import Path
-
-from typing import List
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -45,6 +43,10 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self._db_conn: sqlite3.Connection = connect(str(get_db_path()))
+
+        # cохранение результатов после расчета
+        self._last_records: Optional[list[StageRecord]] = None
+        self._last_result: Optional[MmadResult] = None
 
         self.init_ui()
 
@@ -84,9 +86,17 @@ class MainWindow(QMainWindow):
 
         title = QLabel("Исходные данные")
         title.setStyleSheet("font-size: 16px; font-weight: 600;")
+        left_layout.addWidget(title)
+
+        row_search = QHBoxLayout()
+        row_search.setSpacing(8)
+        row_search.addWidget(QLabel("Шифр пробы:"))
 
         self.sample_code_edit = QLineEdit()
-        left_layout.addWidget(self.sample_code_edit)
+        self.sample_code_edit.setPlaceholderText("Например: A-001")
+        row_search.addWidget(self.sample_code_edit)
+
+        left_layout.addLayout(row_search)
 
         hint = QLabel("Распределение массы частиц аэрозоля по ступеням импактора\n")
         hint.setWordWrap(True)
@@ -182,14 +192,11 @@ class MainWindow(QMainWindow):
         self.db_panel = DbHistoryPanel(self._db_conn, parent=page_db)
         layout = QVBoxLayout(page_db)
         layout.addWidget(self.db_panel)
-        self.db_panel.btn_load.clicked.connect(self.on_load_run_from_db)
+        self.db_panel.load_requested.connect(self.on_load_run_from_db)
 
         # Первичная загрузка
         self.db_panel.reload()
         self.tabs.addTab(page_db, "База данных")
-
-        self._last_result = None  # cохранение результатов после расчета
-        self._last_records = None
 
     def _fill_default_rows(self) -> None:
         """
@@ -235,6 +242,7 @@ class MainWindow(QMainWindow):
         self.btn_export_csv.setEnabled(False)
         self.btn_save_current.setEnabled(False)
         self.btn_save_all.setEnabled(False)
+        self.btn_save_db.setEnabled(False)
 
         self.results_panel.clear()
 
@@ -541,12 +549,10 @@ class MainWindow(QMainWindow):
             run_row, stage_rows = load_run(self._db_conn, run_id)
 
             # Шифр пробы
-            if hasattr(self, "sample_code_edit") and self.sample_code_edit is not None:
-                self.sample_code_edit.setText(str(run_row["sample_code"]))
+            self.sample_code_edit.setText(str(run_row["sample_code"]))
 
             # Заполннение таблицы исходных данных
             self.table.setRowCount(len(stage_rows))
-
             records: list[StageRecord] = []
 
             for row_idx, s in enumerate(stage_rows):
@@ -587,36 +593,30 @@ class MainWindow(QMainWindow):
 
             # 3) Формирование MmadResult из runs (без пересчёта)
             result = MmadResult(
-                mmad=float(run_row["mmad_um"]),
+                mmad=float(run_row["mmad"]),
                 gsd=float(run_row["gsd"]),
-                d10=float(run_row["d10_um"]),
-                d16=float(run_row["d16_um"]),
-                d84=float(run_row["d84_um"]),
-                d90=float(run_row["d90_um"]),
-                d15_87=float(run_row["d15_87_um"]),
-                d84_13=float(run_row["d84_13_um"]),
+                d10=float(run_row["d10"]),
+                d16=float(run_row["d16"]),
+                d84=float(run_row["d84"]),
+                d90=float(run_row["d90"]),
+                d15_87=float(run_row["d15_87"]),
+                d84_13=float(run_row["d84_13"]),
                 span=float(run_row["span"]),
                 fpf_cutoff_um=float(run_row["fpf_cutoff_um"]),
                 fpf_pct=float(run_row["fpf_pct"]),
                 total_mass=float(run_row["total_mass_ug"]),
                 log_mean=float(run_row["log_mean"]),
-                mass_mean=float(run_row["mass_mean_um"]),
-                modal=float(run_row["modal_um"]),
+                mass_mean=float(run_row["mass_mean"]),
+                modal=float(run_row["modal"]),
                 diam_um=np.array([], dtype=float),
                 cum_undersize_pct=np.array([], dtype=float),
             )
 
-            # Пересчtn кумулятивной кривой для графиков
+            # Пересчет кумулятивной кривой для графиков
             diam_um, cum_pct = compute_cumulative_undersize(records)
 
             # "дозаполняем" result для графиков
-            result = MmadResult(
-                **{
-                    **result.__dict__,
-                    "diam_um": diam_um,
-                    "cum_undersize_pct": cum_pct,
-                }
-            )
+            result = replace(result, diam_um=diam_um, cum_undersize_pct=cum_pct)
 
             # Сохраняем "последние" значения (для экспорта/сохранения)
             self._last_records = records
@@ -629,6 +629,11 @@ class MainWindow(QMainWindow):
             # Переключимся на вкладку "Новый расчёт"
             if hasattr(self, "tabs"):
                 self.tabs.setCurrentIndex(0)
+
+            self.btn_export_csv.setEnabled(True)
+            self.btn_save_current.setEnabled(True)
+            self.btn_save_all.setEnabled(True)
+            self.btn_save_db.setEnabled(True)
 
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Ошибка загрузки", str(exc))

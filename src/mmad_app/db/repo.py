@@ -116,7 +116,8 @@ def list_runs(conn: sqlite3.Connection, limit: int = 50) -> List[sqlite3.Row]:
     """Список последних расчётов (для истории)."""
     cur = conn.execute(
         """
-        SELECT id, created_at, sample_code, mmad, gsd, fpf_pct, total_mass_ug
+        SELECT id, created_at, sample_code, mmad, gsd, d10, d16, d84, d90,
+        span, fpf_pct, log_mean, mass_mean, modal
         FROM runs
         ORDER BY id DESC
         LIMIT ?
