@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import numpy as np
-from scipy.stats import norm
+from mmad_app.core.normal import normal_cdf, normal_ppf
 
 from mmad_app.core.models import ProbitLine
 
@@ -64,7 +64,7 @@ def fit_probit(diam: np.ndarray, cum_pct: np.ndarray) -> ProbitLine:
     p = clip_prob(y_pct / 100.0)
 
     # Пробит: z = Phi^{-1}(p) + 5
-    z = norm.ppf(p)
+    z = normal_ppf(p)
     probit = z + 5.0
 
     # Регрессия по X = log10(d)
@@ -116,7 +116,7 @@ def predict_cumulative_from_probit(
 
     # norm.cdf ожидает z = Φ^{-1}(p), а не probit (z + 5)
     z = probit - 5.0
-    p = norm.cdf(z)
+    p = normal_cdf(z)
 
     out[mask] = 100.0 * p
     return out
@@ -144,4 +144,4 @@ def probit_scale(pct: np.ndarray) -> np.ndarray:
         Значения в шкале probit (z + 5), соответствующие заданным процентам.
     """
     p = clip_prob(np.asarray(pct, dtype=float) / 100.0)
-    return norm.ppf(p) + 5.0
+    return normal_ppf(p) + 5.0

@@ -38,3 +38,4 @@ docs/variable.txt
 .python-version
 .wheelhouse_win_cp311/
 wheelhouse_win_cp311/
+*.spec

@@ -355,8 +355,8 @@ def compute_mmad(records: Iterable[StageRecord]) -> MmadResult:
     gsd = float(np.sqrt(d84_13 / d15_87))
 
     # D10/D90 и Span
-    d10 = interpolate_d_at_cum_pct_logx(diam[1:7], cum_pct[1:7], target_pct=10.0)
-    d90 = interpolate_d_at_cum_pct_logx(diam[1:7], cum_pct[1:7], target_pct=90.0)
+    d10 = interpolate_d_at_cum_pct_logx(diam, cum_pct, target_pct=10.0)
+    d90 = interpolate_d_at_cum_pct_logx(diam, cum_pct, target_pct=90.0)
 
     if mmad <= 0.0:
         raise ValueError("MMAD получился <= 0, невозможно вычислить Span.")

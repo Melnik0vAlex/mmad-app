@@ -7,19 +7,22 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Optional, Sequence, Tuple
 
+import matplotlib
 import numpy as np
-from scipy.stats import norm
 from PySide6.QtWidgets import QVBoxLayout, QWidget
-
-from matplotlib.axes import Axes
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
-from matplotlib.ticker import AutoMinorLocator, MaxNLocator, MultipleLocator
 
 from mmad_app.core.models import ProbitLine
 from mmad_app.core.probit import clip_prob, fit_probit
+from mmad_app.core.normal import normal_ppf
+
+matplotlib.use("QtAgg")
+
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
 
 class PlotWidget(QWidget):
@@ -27,6 +30,10 @@ class PlotWidget(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+
+        # Ленивая загрузка "тяжёлых" компонентов matplotlib
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+        from matplotlib.figure import Figure
 
         self._figure = Figure()
         self._canvas = FigureCanvas(self._figure)
@@ -50,6 +57,8 @@ class PlotWidget(QWidget):
 
     def apply_default_style(self, ax: Axes) -> None:
         """Единый стиль делений и сетки."""
+        from matplotlib.ticker import AutoMinorLocator, MaxNLocator, MultipleLocator
+
         ax.xaxis.set_major_locator(MaxNLocator(nbins=6))
         ax.xaxis.set_minor_locator(AutoMinorLocator(2))
         ax.yaxis.set_major_locator(MultipleLocator(10))
@@ -177,6 +186,8 @@ class PlotWidget(QWidget):
         else:
             ax.set_xlim(0.0, 10.0)
 
+        from matplotlib.ticker import MaxNLocator, MultipleLocator
+
         # 4) Тики: только "основные" (без minor)
         ax.xaxis.set_major_locator(MaxNLocator(nbins=6))
         ax.yaxis.set_major_locator(MultipleLocator(10))
@@ -274,13 +285,7 @@ class PlotWidget(QWidget):
         d = np.asarray(diam_um, dtype=float)
         y = np.asarray(cum_pct, dtype=float)
 
-        mask = (
-            np.isfinite(d)
-            & np.isfinite(y)
-            & (d > 0.0)
-            & (y > 0.0)
-            & (y < 100.0)
-        )
+        mask = np.isfinite(d) & np.isfinite(y) & (d > 0.0) & (y > 0.0) & (y < 100.0)
 
         d = d[mask]
         y = y[mask]
@@ -294,7 +299,7 @@ class PlotWidget(QWidget):
             return ProbitLine(a=float("nan"), b=float("nan"), rmse=float("nan"))
 
         p = clip_prob(y / 100.0, eps=clip_eps)
-        probit = norm.ppf(p) + 5.0
+        probit = normal_ppf(p) + 5.0
 
         if use_log10_x:
             x = np.log10(d)
@@ -518,7 +523,7 @@ class PlotWidget(QWidget):
                     model,
                     linewidth=2.0,
                     label=f"Логнормальная аппроксимация"
-                        rf" ($\mu={mu:.2f}$, $\sigma={sigma:.2f}$, RMSE={fit.rmse:.2f})"
+                    rf" ($\mu={mu:.2f}$, $\sigma={sigma:.2f}$, RMSE={fit.rmse:.2f})",
                 )
 
         # Ось X: натуральный логарифм аэродинамического диаметра частиц

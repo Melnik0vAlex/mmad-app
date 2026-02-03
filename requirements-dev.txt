@@ -2,4 +2,3 @@ pytest>=8
 black>=24
 pylint>=3
 pyinstaller>=6
-scipy>=1.17

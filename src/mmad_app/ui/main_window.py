@@ -72,6 +72,7 @@ class MainWindow(QMainWindow):
 
         page_calculate = QWidget()
         calc_layout = QHBoxLayout()
+        calc_layout.setContentsMargins(8, 8, 8, 8)
 
         # QSplitter по горизонтали
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -136,7 +137,7 @@ class MainWindow(QMainWindow):
         # Правая панель
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setContentsMargins(8, 8, 8, 8)
 
         result_title = QLabel("Результаты расчетов")
         result_title.setStyleSheet("font-size: 16px; font-weight: 600;")
