@@ -36,3 +36,5 @@ lerna-debug.log*
 *.sqlite3
 docs/variable.txt
 .python-version
+.wheelhouse_win_cp311/
+wheelhouse_win_cp311/

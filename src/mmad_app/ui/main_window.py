@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
+# src/mmad_app/ui/main_window.py
 """
-Главное окно приложения (QMainWindow).
+Главное окно приложения
 """
 
 from __future__ import annotations
@@ -199,9 +200,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(page_db, "База данных")
 
     def _fill_default_rows(self) -> None:
-        """
-        Заполняет таблицу базовыми названиями ступеней.
-        """
+        """Заполняет таблицу базовыми названиями ступеней."""
         rows = [
             ("Ступень 0", 9.0, 10.0),
             ("Ступень 1", 5.8, 9.0),
@@ -340,9 +339,7 @@ class MainWindow(QMainWindow):
             return
 
     def on_fill_demo(self) -> None:
-        """
-        Заполняет таблицу тестовыми значениями.
-        """
+        """Заполняет таблицу тестовыми значениями."""
         demo_data = (0.0034, 0.0115, 0.0233, 0.0582, 0.0408, 0.0140, 0.0015, 0.0000)
 
         # Запись в таблицу построчно
@@ -357,9 +354,7 @@ class MainWindow(QMainWindow):
         self.on_calculate()
 
     def on_save_plot_clicked(self) -> None:
-        """
-        Сохраняет график текущей вкладки.
-        """
+        """Сохраняет график текущей вкладки."""
         filename, _ = QFileDialog.getSaveFileName(
             self,
             "Сохранить график",
@@ -375,11 +370,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка сохранения", str(exc))
 
     def save_all_plots(self, directory: str | Path, *, dpi: int = 300) -> None:
-        """
-        Сохраняет все графики в указанную папку.
-
-        Файлы сохраняются в PNG. При желании можно сменить расширение на PDF/SVG.
-        """
+        """Сохраняет все графики в указанную папку."""
         out_dir = Path(directory)
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -408,9 +399,7 @@ class MainWindow(QMainWindow):
             raise RuntimeError("Нет вкладок с графиками, поддерживающих сохранение.")
 
     def on_export_save_current_plot(self) -> None:
-        """
-        Сохраняет график текущей вкладки PlotTabs.
-        """
+        """Сохраняет график текущей вкладки PlotTabs."""
         filename, _ = QFileDialog.getSaveFileName(
             self,
             "Сохранить график (текущая вкладка)",
@@ -426,9 +415,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить график:\n{exc}")
 
     def on_export_save_all_plots(self) -> None:
-        """
-        Сохраняет все вкладки с графиками в выбранную папку.
-        """
+        """Сохраняет все вкладки с графиками в выбранную папку."""
         directory = QFileDialog.getExistingDirectory(
             self,
             "Выберите папку для сохранения графиков",

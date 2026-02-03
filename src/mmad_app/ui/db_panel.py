@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
 # src/mmad_app/ui/db_panel.py
-"""Виджет вкладки "База данных": список сохранённых расчётов (SQLite)."""
+"""
+Панель с результатами расчетов
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 import sqlite3
 from typing import List, Optional
 
@@ -60,7 +63,7 @@ class DbHistoryPanel(QWidget):
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(8)
 
-        # ---- Верхняя панель: поиск + кнопки ----
+        # Верхняя панель: поиск + кнопки
         top = QHBoxLayout()
         top.setSpacing(8)
         root.addLayout(top)
@@ -86,7 +89,7 @@ class DbHistoryPanel(QWidget):
         self.btn_delete.setEnabled(False)
         top.addWidget(self.btn_delete)
 
-        # ---- Таблица ----
+        # Таблицичное отображение результатов расчета
         self.table = QTableWidget(0, 14)
         self.table.setHorizontalHeaderLabels(
             [
@@ -111,9 +114,9 @@ class DbHistoryPanel(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
 
-        # Растягиваем некоторые колонки
+        # Растягивание некоторх колонок
         header = self.table.horizontalHeader()
-        header.setStretchLastSection(True)
+        header.setStretchLastSection(False)
         header.setDefaultAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         )
@@ -123,12 +126,11 @@ class DbHistoryPanel(QWidget):
 
         root.addWidget(self.table, stretch=1)
 
-        # ---- Подсказка снизу ----
+        # Отображение подсказки снизу
         self.hint = QLabel("Двойной клик по строке — загрузить запись.")
         self.hint.setStyleSheet("color: #777;")
         root.addWidget(self.hint)
 
-    # Публичный метод: перезагрузка данных
     def reload(self) -> None:
         """Загружает последние записи из БД и обновляет таблицу."""
         rows = list_runs(self._conn, limit=200)
@@ -155,7 +157,6 @@ class DbHistoryPanel(QWidget):
 
         self._render_table(self._rows)
 
-    # Внутреннее: отрисовка таблицы
     def _render_table(self, rows: List[RunRow]) -> None:
         """Заполняет QTableWidget данными."""
         self.table.setRowCount(0)
@@ -163,7 +164,7 @@ class DbHistoryPanel(QWidget):
         for row_idx, r in enumerate(rows):
             self.table.insertRow(row_idx)
             self._set_item(row_idx, 0, str(r.run_id), align_right=True)
-            self._set_item(row_idx, 1, r.created_at)
+            self._set_item(row_idx, 1, self._format_created_at(r.created_at))
             self._set_item(row_idx, 2, r.sample_code)
             self._set_item(row_idx, 3, f"{r.mmad:.2f}", align_right=True)
             self._set_item(row_idx, 4, f"{r.lmd:.2f}", align_right=True)
@@ -196,7 +197,6 @@ class DbHistoryPanel(QWidget):
             )
         self.table.setItem(row, col, item)
 
-    # Выбор/фильтр/действия пользователя
     def _on_selection_changed(self) -> None:
         """Включает/выключает кнопки действий в зависимости от выбора строки."""
         has_selection = bool(self.table.selectionModel().selectedRows())
@@ -255,13 +255,11 @@ class DbHistoryPanel(QWidget):
             QMessageBox.critical(self, "Ошибка", str(exc))
             return
 
-        # Обновим таблицу и очистим выбор
+        # Обновление таблицы и очистка выбора
         self.reload()
 
     def _apply_filter(self, text: str) -> None:
-        """
-        Фильтрует таблицу по sample_code (простая подстрока, без SQL).
-        """
+        """Фильтрует таблицу по sample_code (простая подстрока, без SQL)."""
         query = (text or "").strip().lower()
 
         for i in range(self.table.rowCount()):
@@ -269,3 +267,13 @@ class DbHistoryPanel(QWidget):
             code = item.text().lower() if item else ""
             visible = True if not query else (query in code)
             self.table.setRowHidden(i, not visible)
+
+    def _format_created_at(self, iso_str: str) -> str:
+        """Преобразует дату/время из ISO 8601."""
+        try:
+            dt = datetime.fromisoformat(iso_str)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone()
+            return dt.strftime("%d.%m.%Y %H:%M")
+        except ValueError:
+            return iso_str
