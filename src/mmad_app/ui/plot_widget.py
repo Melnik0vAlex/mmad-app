@@ -21,8 +21,6 @@ matplotlib.use("QtAgg")
 
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
-    from matplotlib.figure import Figure
-    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
 
 class PlotWidget(QWidget):
@@ -32,8 +30,13 @@ class PlotWidget(QWidget):
         super().__init__(parent)
 
         # Ленивая загрузка "тяжёлых" компонентов matplotlib
-        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+        # pylint: disable=import-outside-toplevel
+        from matplotlib.backends.backend_qtagg import (
+            FigureCanvasQTAgg as FigureCanvas,
+        )
         from matplotlib.figure import Figure
+
+        # pylint: enable=import-outside-toplevel
 
         self._figure = Figure()
         self._canvas = FigureCanvas(self._figure)
@@ -57,7 +60,10 @@ class PlotWidget(QWidget):
 
     def apply_default_style(self, ax: Axes) -> None:
         """Единый стиль делений и сетки."""
+        # pylint: disable=import-outside-toplevel
         from matplotlib.ticker import AutoMinorLocator, MaxNLocator, MultipleLocator
+
+        # pylint: enable=import-outside-toplevel
 
         ax.xaxis.set_major_locator(MaxNLocator(nbins=6))
         ax.xaxis.set_minor_locator(AutoMinorLocator(2))
@@ -186,7 +192,10 @@ class PlotWidget(QWidget):
         else:
             ax.set_xlim(0.0, 10.0)
 
+        # pylint: disable=import-outside-toplevel
         from matplotlib.ticker import MaxNLocator, MultipleLocator
+
+        # pylint: enable=import-outside-toplevel
 
         # 4) Тики: только "основные" (без minor)
         ax.xaxis.set_major_locator(MaxNLocator(nbins=6))
@@ -296,7 +305,9 @@ class PlotWidget(QWidget):
             ax.set_ylabel("Probit = Φ⁻¹(p) + 5")
             self.apply_default_style(ax)
             self.redraw()
-            return ProbitLine(a=float("nan"), b=float("nan"), rmse=float("nan"))
+            return ProbitLine(
+                a=float("nan"), b=float("nan"), rmse=float("nan"), r2=float("nan")
+            )
 
         p = clip_prob(y / 100.0, eps=clip_eps)
         probit = normal_ppf(p) + 5.0
@@ -336,7 +347,9 @@ class PlotWidget(QWidget):
             y_line,
             linestyle="--",
             color="tab:blue",
-            label=f"Линейная аппроксимация (RMSE = {fit.rmse:.2f})",
+            label=(
+                "Линейная аппроксимация\n" f"RMSE = {fit.rmse:.3f},  R² = {fit.r2:.4f}"
+            ),
         )
 
         ax.set_xlabel(x_label)
@@ -348,11 +361,89 @@ class PlotWidget(QWidget):
         self.redraw()
         return fit
 
+    def plot_least_squares(
+        self,
+        x: np.ndarray,
+        y: np.ndarray,
+        *,
+        title: str = "Метод наименьших квадратов",
+    ) -> None:
+        """
+        Отрисовывает график линейной регрессии (МНК).
+
+
+        Параметры
+        ---------
+        x:
+            Массив значений по оси X (например, arcerf(2P-1)).
+            Должен содержать конечные числа, размерность >= 2.
+        y:
+            Массив значений по оси Y (например, ln(d)).
+            Должен быть той же длины, что и x, и содержать конечные числа.
+        title:
+            Заголовок графика.
+
+        Возвращает
+        ----------
+        None
+            Функция обновляет график на canvas.
+
+        """
+        ax = self.new_axes()
+
+        a, b = np.polyfit(x, y, deg=1, full=False)
+        # предсказания модели
+        y_hat = a * x + b
+
+        # среднее значение наблюдений
+        y_mean = np.mean(y)
+
+        # сумма квадратов остатков (residual sum of squares)
+        ss_res = np.sum((y - y_hat) ** 2)
+
+        # полная сумма квадратов (total sum of squares)
+        ss_tot = np.sum((y - y_mean) ** 2)
+
+        # коэффициент детерминации R²
+        r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 1.0
+
+        x_line = np.linspace(float(np.min(x)), float(np.max(x)), 200)
+        y_line = a * x_line + b
+
+        ax.plot(
+            x,
+            y,
+            linestyle="None",
+            marker="s",
+            markersize=6,
+            markerfacecolor="orange",
+            markeredgecolor="black",
+            markeredgewidth=0.8,
+            linewidth=1.6,
+            label="Экспериментальные значения",
+        )
+        ax.plot(
+            x_line,
+            y_line,
+            linestyle="--",
+            color="tab:blue",
+            label=f"Линейная аппроксимация (R² = {r2:.2f})",
+        )
+
+        ax.set_xlabel("arcerf(2P-1)")
+        ax.set_ylabel("ln(d)")
+        ax.set_title(title, wrap=True)
+        ax.grid(True, which="major", linestyle=":", linewidth=0.8, alpha=0.6)
+        ax.legend(loc="lower right", frameon=True)
+
+        self.redraw()
+
     def plot_bar(
         self,
         centers_um: Sequence[float],
         masses_ug: Sequence[float],
         *,
+        labels: Sequence[str] | None = None,
         title: str = "Распределение размеров частиц по массе",
         xlabel: str = "Средний геометрический диаметр ступени, мкм",
         ylabel: str = "Масса, мкг",
@@ -376,11 +467,18 @@ class PlotWidget(QWidget):
             self.redraw()
             return
 
-        order = np.argsort(x)
-        x = x[order]
-        y = y[order]
+        if labels is None:
+            order = np.argsort(x)
+            x = x[order]
+            y = y[order]
+            tick_labels = [fmt_ticks.format(v) for v in x]
+        else:
+            labels_arr = np.asarray(labels)[mask]
+            tick_labels = list(labels_arr)
 
-        x_pos = np.arange(x.size, dtype=int)
+        # позиции баров
+        x_pos = np.arange(len(y), dtype=int)
+
         ax.bar(
             x=x_pos,
             height=y,
@@ -391,7 +489,7 @@ class PlotWidget(QWidget):
         )
 
         ax.set_xticks(x_pos)
-        ax.set_xticklabels([fmt_ticks.format(v) for v in x])
+        ax.set_xticklabels(tick_labels, rotation=45)
 
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)

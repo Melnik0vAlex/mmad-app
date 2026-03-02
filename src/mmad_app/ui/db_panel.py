@@ -35,7 +35,8 @@ class RunRow:
     run_id: int
     created_at: str
     sample_code: str
-    mmad: float
+
+    mmad_lp: float
     lmd: float
     mmd: float
     mod: float
@@ -46,6 +47,21 @@ class RunRow:
     d90: float
     span: float
     fpf_pct: float
+
+    mmad_ls: float
+    kor_k: float
+    sigma: float
+    r: float
+    slope: float
+    intercept: float
+    se_slope: float
+    se_intercept: float
+    r2: float
+    syx: float
+    f_stat: float
+    df: int
+    ss_reg: float
+    ss_res: float
 
 
 class DbHistoryPanel(QWidget):
@@ -90,13 +106,13 @@ class DbHistoryPanel(QWidget):
         top.addWidget(self.btn_delete)
 
         # Таблицичное отображение результатов расчета
-        self.table = QTableWidget(0, 14)
+        self.table = QTableWidget(0, 18)
         self.table.setHorizontalHeaderLabels(
             [
                 "ID",
                 "Дата",
                 "Шифр пробы",
-                "MMAD, мкм",
+                "MMAD (log-probit), мкм",
                 "LMD, мкм",
                 "MMD, мкм",
                 "mod, мкм",
@@ -107,6 +123,10 @@ class DbHistoryPanel(QWidget):
                 "d90, мкм",
                 "Span",
                 "FPF, %",
+                "d50 (мнк), мкм",
+                "√k",
+                "σ(lnD)",
+                "r"
             ]
         )
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -140,7 +160,8 @@ class DbHistoryPanel(QWidget):
                 run_id=int(r["id"]),
                 created_at=str(r["created_at"]),
                 sample_code=str(r["sample_code"]),
-                mmad=float(r["mmad"]),
+
+                mmad_lp=float(r["mmad"]),
                 lmd=float(r["log_mean"]),
                 mmd=float(r["mass_mean"]),
                 mod=float(r["modal"]),
@@ -151,6 +172,21 @@ class DbHistoryPanel(QWidget):
                 d90=float(r["d90"]),
                 span=float(r["span"]),
                 fpf_pct=float(r["fpf_pct"]),
+
+                mmad_ls=float(r["mmad_ls"]),
+                kor_k=float(r["kor_k"]),
+                sigma=float(r["sigma"]),
+                r=float(r["r"]),
+                slope=float(r["slope"]),
+                intercept=float(r["intercept"]),
+                se_slope=float(r["se_slope"]),
+                se_intercept=float(r["se_intercept"]),
+                r2=float(r["r2"]),
+                syx=float(r["syx"]),
+                f_stat=float(r["f_stat"]),
+                df=int(r["df"]),
+                ss_reg=float(r["ss_reg"]),
+                ss_res=float(r["ss_res"]),
             )
             for r in rows
         ]
@@ -166,7 +202,7 @@ class DbHistoryPanel(QWidget):
             self._set_item(row_idx, 0, str(r.run_id), align_right=True)
             self._set_item(row_idx, 1, self._format_created_at(r.created_at))
             self._set_item(row_idx, 2, r.sample_code)
-            self._set_item(row_idx, 3, f"{r.mmad:.2f}", align_right=True)
+            self._set_item(row_idx, 3, f"{r.mmad_lp:.2f}", align_right=True)
             self._set_item(row_idx, 4, f"{r.lmd:.2f}", align_right=True)
             self._set_item(row_idx, 5, f"{r.mmd:.2f}", align_right=True)
             self._set_item(row_idx, 6, f"{r.mod:.2f}", align_right=True)
@@ -177,6 +213,10 @@ class DbHistoryPanel(QWidget):
             self._set_item(row_idx, 11, f"{r.d90:.2f}", align_right=True)
             self._set_item(row_idx, 12, f"{r.span:.2f}", align_right=True)
             self._set_item(row_idx, 13, f"{r.fpf_pct:.2f}", align_right=True)
+            self._set_item(row_idx, 14, f"{r.mmad_ls:.2f}", align_right=True)
+            self._set_item(row_idx, 15, f"{r.kor_k:.2f}", align_right=True)
+            self._set_item(row_idx, 16, f"{r.sigma:.2f}", align_right=True)
+            self._set_item(row_idx, 17, f"{r.r:.2f}", align_right=True)
 
         self.table.resizeColumnsToContents()
         self._on_selection_changed()

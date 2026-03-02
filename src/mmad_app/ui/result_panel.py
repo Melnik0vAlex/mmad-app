@@ -2,87 +2,109 @@
 # ui/results_panel.py
 
 from __future__ import annotations
-from typing import Optional
+
+from typing import Any, Dict, Iterable, Optional, Tuple, Union
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFormLayout, QGroupBox, QLabel
 
+Number = Union[int, float]
+Value = Union[None, Number, str]
+
 
 class ResultsPanel(QGroupBox):
-    """
-    Карточка "Результаты" для отображения рассчитанных метрик APSD.
-    """
+    """Универсальная карточка отображения результатов расчета."""
 
-    def __init__(self, parent=None) -> None:
+    def __init__(
+        self,
+        title: str = "Результаты",
+        rows: Optional[Iterable[Tuple[str, str]]] = None,
+        parent=None,
+    ) -> None:
+        """
+        Параметры
+        ---------
+        title:
+            Заголовок метода по которому были получены результаты.
+        rows:
+            Итерируемое пар (key, caption), где:
+            key     — внутренний ключ поля (используется в set_values)
+            caption — подпись слева в форме
+        """
         super().__init__(parent)
-
+        self.setTitle(title)
+        self.setStyleSheet(
+            """
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top center;
+                padding: 6px 6px;
+                font-size: 16px;
+                font-weight: 600;
+            }
+            """)
         self._layout = QFormLayout(self)
         self._layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         self._layout.setFormAlignment(Qt.AlignmentFlag.AlignTop)
         self._layout.setHorizontalSpacing(16)
         self._layout.setVerticalSpacing(6)
 
-        self.lbl_mmad = self._add_row("MMAD (d50), мкм")
-        self.lbl_log_mean = self._add_row("LMD, мкм")
-        self.lbl_mass_mean = self._add_row("MMD, мкм")
-        self.lbl_modal = self._add_row("mod, мкм")
-        self.lbl_gsd = self._add_row("GSD")
-        self.lbl_d10 = self._add_row("d10, мкм")
-        self.lbl_d16 = self._add_row("d16, мкм")
-        self.lbl_d84 = self._add_row("d84, мкм")
-        self.lbl_d90 = self._add_row("d90, мкм")
-        self.lbl_span = self._add_row("Span")
-        self.lbl_fpf = self._add_row("FPF (< 5 мкм), %")
+        self._fields: Dict[str, QLabel] = {}
+
+        if rows is not None:
+            self.set_rows(rows)
 
         self.clear()
 
-    def _add_row(self, name: str) -> QLabel:
-        """Добавляет строку в форму и возвращает QLabel значения."""
+    def set_rows(self, rows: Iterable[Tuple[str, str]]) -> None:
+        """Полностью пересоздаёт строки формы."""
+        # Удаляем старые виджеты из layout
+        while self._layout.rowCount() > 0:
+            self._layout.removeRow(0)
+
+        self._fields.clear()
+
+        for key, caption in rows:
+            self._fields[key] = self._add_row(caption)
+
+    def _add_row(self, caption: str) -> QLabel:
+        """Добавляет строку и возвращает QLabel значения (правая колонка)."""
         value = QLabel("—")
         value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self._layout.addRow(name, value)
+        self._layout.addRow(caption, value)
         return value
 
     @staticmethod
-    def _fmt(x: Optional[float], ndigits: int = 2) -> str:
-        """Формат числа с защитой от None/NaN."""
-        if x is None:
+    def _fmt(value: Value, ndigits: int = 2) -> str:
+        """Форматирует число/строку с защитой от None/NaN."""
+        if value is None:
             return "—"
+
+        if isinstance(value, str):
+            s = value.strip()
+            return s if s != "" else "—"
+
+        # Число
         try:
+            x = float(value)
             if x != x:  # NaN
                 return "—"
         except Exception:
             return "—"
-        return f"{float(x):.{ndigits}f}"
+
+        return f"{x:.{ndigits}f}"
 
     def clear(self) -> None:
-        """Сбрасывает отображение результатов."""
-        for w in (
-            self.lbl_mmad,
-            self.lbl_gsd,
-            self.lbl_d10,
-            self.lbl_d16,
-            self.lbl_d84,
-            self.lbl_d90,
-            self.lbl_span,
-            self.lbl_fpf,
-            self.lbl_log_mean,
-            self.lbl_mass_mean,
-            self.lbl_modal,
-        ):
-            w.setText("—")
+        """Сбрасывает отображение всех полей в '—'."""
+        for lbl in self._fields.values():
+            lbl.setText("—")
 
-    def set_result(self, result) -> None:
-        """Заполняет карточку данными результата."""
+    def set_values(self, values: Dict[str, Value], ndigits: int = 2) -> None:
+        """Обновляет значения по ключам."""
+        for key, lbl in self._fields.items():
+            lbl.setText(self._fmt(values.get(key), ndigits))
 
-        self.lbl_mmad.setText(self._fmt(getattr(result, "mmad", None), 2))
-        self.lbl_gsd.setText(self._fmt(getattr(result, "gsd", None), 2))
-        self.lbl_d10.setText(self._fmt(getattr(result, "d10", None), 2))
-        self.lbl_d16.setText(self._fmt(getattr(result, "d16", None), 2))
-        self.lbl_d84.setText(self._fmt(getattr(result, "d84", None), 2))
-        self.lbl_d90.setText(self._fmt(getattr(result, "d90", None), 2))
-        self.lbl_span.setText(self._fmt(getattr(result, "span", None), 2))
-        self.lbl_fpf.setText(self._fmt(getattr(result, "fpf_pct", None), 2))
-        self.lbl_log_mean.setText(self._fmt(getattr(result, "log_mean", None), 2))
-        self.lbl_mass_mean.setText(self._fmt(getattr(result, "mass_mean", None), 2))
-        self.lbl_modal.setText(self._fmt(getattr(result, "modal", None), 2))
+    def set_result(self, result: Any, ndigits: int = 2) -> None:
+        """Читает значения через getattr(result, key)."""
+        values = {key: getattr(result, key, None) for key in self._fields}
+        self.set_values(values, ndigits=ndigits)

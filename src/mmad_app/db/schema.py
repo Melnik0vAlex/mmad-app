@@ -26,9 +26,24 @@ CREATE TABLE IF NOT EXISTS runs (
     span            REAL NOT NULL,
     fpf_pct         REAL NOT NULL,
 
-    log_mean        REAL,
-    mass_mean       REAL,
-    modal           REAL,
+    log_mean        REAL NOT NULL,
+    mass_mean       REAL NOT NULL,
+    modal           REAL NOT NULL,
+
+    mmad_ls         REAL NOT NULL,
+    kor_k           REAL NOT NULL,
+    sigma           REAL NOT NULL,
+    r               REAL NOT NULL,
+    slope           REAL NOT NULL,
+    intercept       REAL NOT NULL,
+    se_slope        REAL NOT NULL,
+    se_intercept    REAL NOT NULL,
+    r2              REAL NOT NULL,
+    syx             REAL NOT NULL,
+    f_stat          REAL NOT NULL,
+    df              INT NOT NULL,
+    ss_reg          REAL NOT NULL,
+    ss_res          REAL NOT NULL,
 
     notes           TEXT
 );
@@ -37,8 +52,8 @@ CREATE TABLE IF NOT EXISTS run_stages (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id      INTEGER NOT NULL,
     stage_name  TEXT NOT NULL,
-    d_low       REAL NOT NULL,
-    d_high      REAL NOT NULL,
+    d_low       REAL NULL,
+    d_high      REAL NULL,
     mass        REAL NOT NULL,
 
     FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE

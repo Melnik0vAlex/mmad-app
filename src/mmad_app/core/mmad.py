@@ -2,111 +2,188 @@
 # src/mmad_app/core/mmad.py
 from __future__ import annotations
 
-from typing import Iterable, List, Tuple
+from typing import Iterable, List, Tuple, Optional
 import numpy as np
 
-from mmad_app.core.models import StageRecord, MmadResult
+from mmad_app.core.models import StageRecord, MmadResult, LinestStats, MmadResultLS
+from mmad_app.core.normal import normal_ppf
 
 
 def _validate_records(records: List[StageRecord]) -> None:
     """
-    Валидация исходных данных
+    Проверяет корректность входных данных.
+
+    Важно:
+    - d_low/d_high могут быть None (например, фильтр, пресепаратор, входной канал)
+    - масса должна быть конечной и неотрицательной
+    - для расчётов нужна как минимум некоторая "размерная" часть данных
+      (хотя бы 2 границы диаметра среди d_low/d_high)
     """
     if len(records) < 3:
-        raise ValueError("Необходимо минимум 3 заполненные ступени для расчета.")
+        raise ValueError("Необходимо минимум 3 записи для расчёта.")
 
-    d_low = np.array([r.d_low for r in records], dtype=float)
+    masses = np.array([float(r.mass) for r in records], dtype=float)
+    if np.any(~np.isfinite(masses)):
+        raise ValueError("Обнаружены нечисловые (NaN/inf) значения массы.")
+    if np.any(masses < 0.0):
+        raise ValueError("Масса не может быть отрицательной.")
 
-    mass = np.array([r.mass for r in records], dtype=float)
-
-    if np.any(~np.isfinite(d_low)) or np.any(~np.isfinite(mass)):
-        raise ValueError("Обнаружены нечисловые (NaN/inf) значения.")
-
-    if np.any(mass < 0):
-        raise ValueError("Масса не может быть отрицательно.")
-
-    total = float(np.sum(mass))
+    total = float(np.sum(masses))
     if total <= 0.0:
         raise ValueError("Суммарная масса должна быть > 0.")
 
-    if np.sum(d_low > 0.0) < 2:
-        raise ValueError("Необходимо минимум 2 положительных D50 (мкм)")
+    # Собираем все заданные границы диаметра (и d_low, и d_high)
+    bounds: List[float] = []
+    for r in records:
+        if r.d_low is not None:
+            bounds.append(float(r.d_low))
+        if r.d_high is not None:
+            bounds.append(float(r.d_high))
+
+    bounds_arr = np.array(bounds, dtype=float)
+    bounds_arr = bounds_arr[np.isfinite(bounds_arr) & (bounds_arr > 0.0)]
+
+    if bounds_arr.size < 2:
+        raise ValueError("Недостаточно заданных границ диаметра (нужно >= 2).")
+
+
+def _as_float_array_optional(values: Iterable[Optional[float]]) -> np.ndarray:
+    """
+    Преобразует последовательность Optional[float] в ndarray float,
+    подставляя np.nan вместо None.
+    """
+    return np.array(
+        [np.nan if v is None else float(v) for v in values],
+        dtype=float,
+    )
 
 
 def compute_cumulative_undersize(
     records: Iterable[StageRecord],
+    *,
+    include_unclassified_in_total: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Формирует накопительную кривую накопленной доли массы частиц (< d).
+    Формирует накопительную кривую F(d) = cumulative undersize (%),
+    включая фракции < 0.43 мкм (фильтр) и > 10 мкм (пресепаратор).
 
-    Для каждой ступени каскадного импактора cumulative undersize
-    определяется как доля массы частиц с аэродинамическим диаметром
-    меньше отсечного диаметра данной ступени.
+    Математически:
+        F(d) = 100 * (Σ m_i, где D_i <= d) / (Σ m_total)
 
-    Алгоритм:
-    1. Ступени сортируются по отсечному диаметру (от крупных к мелким).
-    2. Для каждого отсечного диаметра d_i вычисляется:
-           F(d_i) = Σ_{j > i} m_j / Σ m * 100 %,
-       где m_j — масса, осевшая на более мелких ступенях.
-    3. Добавляется граничная точка для крупных частиц: F(d_top) = 100 %.
-    4. Данные упорядочиваются по возрастанию диаметра и очищаются от дубликатов.
+    Здесь мы трактуем элементы так:
+    - если задан d_high (и d_low=None) -> "нижняя" фракция (фильтр): (0, d_high]
+    - если заданы d_low и d_high -> "интервал" ступени: (d_low, d_high]
+    - если задан d_low (и d_high=None) -> "верхняя" фракция (пресепаратор): (d_low, +∞)
+    - если обе границы None -> неклассифицированная масса (входной канал/потери)
 
     Параметры
     ---------
     records:
-        Итератор записей ступеней импактора. Для каждой записи
-        должны быть заданы нижний отсечной диаметр и масса.
+        Итератор записей.
+    include_unclassified_in_total:
+        Если True, масса записей без границ (None/None) включается в знаменатель.
+        По умолчанию False (иначе кумулятива “сожмётся” без привязки к диаметрам).
 
     Возвращает
     ----------
-    Tuple[np.ndarray, np.ndarray]
-        Два массива одинаковой длины:
-        - diam_um : диаметры (мкм),
-        - cum_undersize_pct : накопленная доля массы частиц с диаметром < d, %.
+    (diam_um, cum_undersize_pct)
+        diam_um: диаметры (мкм) строго > 0
+        cum_undersize_pct: F(d), % (монотонно неубывающая)
     """
     res_list = list(records)
     _validate_records(res_list)
 
-    # Сортировка отсечных диаметров D50 (сверху крупные, снизу мелкие)
-    res_sorted = sorted(res_list, key=lambda r: r.d_low, reverse=True)
+    # 1) Разделяем записи
+    bins_upper: List[float] = []  # верхняя граница бина (для суммирования “<= d”)
+    bins_mass: List[float] = []
+    unclassified_mass = 0.0
 
-    d_cut = np.array([r.d_low for r in res_sorted], dtype=float)
-    mass = np.array([r.mass for r in res_sorted], dtype=float)
+    for r in res_list:
+        m = float(r.mass)
+        if m <= 0.0:
+            continue
 
-    total = float(np.sum(mass))
-    if total <= 0.0:
+        if r.d_low is None and r.d_high is None:
+            # Входной канал / потери: нет связи с диаметром
+            unclassified_mass += m
+            continue
+
+        if r.d_low is None and r.d_high is not None:
+            # Фильтр: (0, d_high]
+            upper = float(r.d_high)
+            if upper > 0.0 and np.isfinite(upper):
+                bins_upper.append(upper)
+                bins_mass.append(m)
+            continue
+
+        if r.d_low is not None and r.d_high is not None:
+            # Ступень: (d_low, d_high]
+            low = float(r.d_low)
+            high = float(r.d_high)
+            if (low > 0.0) and np.isfinite(low) and np.isfinite(high) and (high > low):
+                bins_upper.append(high)
+                bins_mass.append(m)
+            continue
+
+        if r.d_low is not None and r.d_high is None:
+            # Пресепаратор: (d_low, +inf)
+            # Для cumulative undersize по определению эта масса НЕ входит в F(d)
+            # при d <= d_low. Чтобы довести кривую до 100%, добавим точку d_max.
+            # Сохраним upper = +inf как маркер.
+            bins_upper.append(float("inf"))
+            bins_mass.append(m)
+            continue
+
+    if len(bins_mass) < 2:
+        raise ValueError("Недостаточно интервалов/фракций для построения кумулятивы.")
+
+    bins_upper_arr = np.asarray(bins_upper, dtype=float)
+    bins_mass_arr = np.asarray(bins_mass, dtype=float)
+
+    # 2) Знаменатель (total mass)
+    total_mass = float(np.sum(bins_mass_arr))
+    if include_unclassified_in_total:
+        total_mass += float(unclassified_mass)
+
+    if total_mass <= 0.0:
         raise ValueError("Суммарная масса должна быть > 0.")
 
-    cum_at_d50 = np.array(
-        [100 * float(np.sum(mass[i + 1 :])) / total for i in range(len(mass))],
-        dtype=float,
-    )
+    # 3) Формируем узлы кривой по всем конечным верхним границам
+    finite_uppers = bins_upper_arr[np.isfinite(bins_upper_arr)]
+    finite_uppers = finite_uppers[finite_uppers > 0.0]
 
-    # Граничные условия для графика и интерполяции
-    d_top = 10.0
+    if finite_uppers.size == 0:
+        raise ValueError(
+            "Нет ни одной конечной границы диаметра для построения кривой."
+        )
 
-    diam = np.concatenate((d_cut, [d_top])).astype(float)
-    cum = np.concatenate((cum_at_d50, [100.0])).astype(float)
+    unique_d = np.unique(np.sort(finite_uppers))
 
-    # Упорядочивание по возрастанию диаметра
-    order = np.argsort(diam)
-    diam = diam[order]
-    cum = cum[order]
+    # Добавим “нижнюю” стартовую точку (чтобы были < min_d)
+    min_d = float(unique_d[0])
+    d_min = max(min_d / 1_000.0, 1e-6)  # строго > 0 для лог-интерполяций
 
-    # Удаление дубликатов диаметров
-    uniq_d = []
-    uniq_c = []
+    # Добавим “верхнюю” точку d_max, чтобы F(d_max)=100%
+    max_d = float(unique_d[-1])
+    d_max = max(max_d * 1.5, max_d + 1.0)
 
-    for d, c in zip(diam, cum):
-        if not uniq_d or d != uniq_d[-1]:
-            uniq_d.append(float(d))
-            uniq_c.append(float(c))
-        else:
-            uniq_c[-1] = max(uniq_c[-1], float(c))
+    diam_points = np.concatenate(([d_min], unique_d, [d_max])).astype(float)
 
-    diam_um = np.array(uniq_d, dtype=float)
-    cut_pct = np.array(uniq_c, dtype=float)
-    return diam_um, cut_pct
+    # 4) Кумулятива: F(d) = sum(mass where upper <= d)/total*100,
+    # а пресепаратор (upper=inf) добавит скачок только на d_max (через 100%).
+    cum_points: List[float] = [0.0]
+
+    for d in unique_d:
+        frac = float(np.sum(bins_mass_arr[bins_upper_arr <= d])) / total_mass
+        cum_points.append(100.0 * frac)
+
+    cum_points.append(100.0)
+    cum_arr = np.asarray(cum_points, dtype=float)
+
+    # 5) Гарантируем монотонность
+    cum_arr = np.maximum.accumulate(cum_arr)
+
+    return diam_points, cum_arr
 
 
 def interpolate_d_at_cum_pct_logx(
@@ -277,6 +354,123 @@ def interpolate_cum_pct_at_d_logx(
     return float(y0 + t * (y1 - y0))
 
 
+def computate_linest_with_stats(y: np.ndarray, x: np.ndarray) -> LinestStats:
+    """
+    Выполняет линейную регрессию y = a*x + b и возвращает статистику,
+    аналогичную Excel LINEST(y_range, x_range, TRUE, TRUE).
+
+    Используемые обозначения
+    ------------------------
+    Пусть есть n наблюдений (x_i, y_i), i = 1..n. Модель:
+
+        y_i = a * x_i + b + ε_i
+
+    где a — наклон (slope), b — свободный член (intercept), ε_i — остатки.
+
+    Возвращаемые показатели (как в Excel)
+    -------------------------------------
+    - slope (a), intercept (b)
+    - se_slope, se_intercept:
+        стандартные ошибки коэффициентов a и b
+    - r2:
+        коэффициент детерминации R²
+    - syx:
+        стандартная ошибка регрессии (SE_yx):
+            syx = sqrt(SS_res / df)
+    - f_stat:
+        F-статистика общей значимости регрессии (для 1 предиктора)
+    - df:
+        степени свободы df = n - 2
+    - ss_reg:
+        сумма квадратов регрессии SS_reg = Σ(ŷ_i - ȳ)²
+    - ss_res:
+        сумма квадратов остатков SS_res = Σ(y_i - ŷ_i)²
+
+    Параметры
+    ---------
+    y:
+        Наблюдаемые значения отклика (зависимая переменная).
+    x:
+        Значения предиктора (независимая переменная).
+
+    Возвращает
+    ----------
+    LinestStats
+        Набор оценок коэффициентов и статистик регрессии.
+    """
+    # Приведение входов к ndarray float (на случай списков/кортежей).
+    y = np.asarray(y, dtype=float)
+    x = np.asarray(x, dtype=float)
+
+    # Оставляем только конечные значения (исключаем NaN и +/-inf).
+    mask = np.isfinite(x) & np.isfinite(y)
+    x = x[mask]
+    y = y[mask]
+
+    n = int(x.size)
+    if n < 3:
+        # Для stats=TRUE в Excel нужна статистика, а она требует df = n - 2 >= 1.
+        raise ValueError("Для статистики ЛИНЕЙН нужно минимум 3 точки (n >= 3).")
+
+    # 1) Оценка коэффициентов a, b методом МНК
+    # np.polyfit(x, y, 1) возвращает [a, b] для y ≈ a*x + b.
+    a, b = np.polyfit(x, y, deg=1, full=False)
+
+    # Предсказания модели и остатки.
+    y_hat = a * x + b
+    resid = y - y_hat
+
+    # 2) Суммы квадратов и R²
+    ss_res = float(np.sum(resid**2))  # SS_res = Σ (y - ŷ)^2
+    y_mean = float(np.mean(y))
+    ss_tot = float(np.sum((y - y_mean) ** 2))  # SS_tot = Σ (y - ȳ)^2
+    ss_reg = float(np.sum((y_hat - y_mean) ** 2))  # SS_reg = Σ (ŷ - ȳ)^2
+
+    # R² = 1 - SS_res / SS_tot. Если SS_tot = 0 (все y одинаковые),
+    # считаем R² = 1.0 (модель "объясняет" нулевую дисперсию).
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0.0 else 1.0
+
+    # 3) Стандартная ошибка регрессии (SE_yx) и стандартные ошибки коэффициентов
+    df = n - 2  # степени свободы для модели с 2 параметрами (a и b)
+    syx = float(np.sqrt(ss_res / df))  # SE_yx = sqrt(SS_res / df)
+
+    # Sxx = Σ (x - x̄)^2
+    x_mean = float(np.mean(x))
+    sxx = float(np.sum((x - x_mean) ** 2))
+    if sxx <= 0.0:
+        # Все x одинаковые => линия не идентифицируема (наклон оценить можно,
+        # но ошибки/значимость некорректны).
+        raise ValueError("Невозможно оценить SE: все x одинаковые.")
+
+    # SE(a) = syx / sqrt(Sxx)
+    se_slope = float(syx / np.sqrt(sxx))
+
+    # SE(b) = syx * sqrt(1/n + x̄^2 / Sxx)
+    se_intercept = float(syx * np.sqrt(1.0 / n + (x_mean**2) / sxx))
+
+    # 4) F-статистика общей значимости регрессии
+    # Для одной независимой переменной:
+    #   F = (SS_reg / 1) / (SS_res / df)
+    if ss_res <= 0.0:
+        # Идеальная аппроксимация (остатки ~ 0) => F -> бесконечность.
+        f_stat = float("inf")
+    else:
+        f_stat = float(ss_reg / (ss_res / df))
+
+    return LinestStats(
+        slope=float(a),
+        intercept=float(b),
+        se_slope=float(se_slope),
+        se_intercept=float(se_intercept),
+        r2=float(r2),
+        syx=float(syx),
+        f_stat=float(f_stat),
+        df=int(df),
+        ss_reg=float(ss_reg),
+        ss_res=float(ss_res),
+    )
+
+
 def compute_mmad(records: Iterable[StageRecord]) -> MmadResult:
     """
     Выполняет расчёт основных метрик APSD по данным каскадного импактора.
@@ -368,46 +562,52 @@ def compute_mmad(records: Iterable[StageRecord]) -> MmadResult:
 
     # Массо-взвешенные средние и мода по интервалам ступеней
     dg_bins: List[float] = []
-    w_bins: List[float] = []
+    m_bins: List[float] = []
 
-    for r in rec_list:
-        d_low = float(getattr(r, "d_low", 0.0))
-        d_high = float(getattr(r, "d_high", 0.0))
-        m = float(getattr(r, "mass", 0.0))
+    for r in rec_list[1:9]:
+        # Пропускаем записи без интервала
+        if r.d_low is None or r.d_high is None:
+            continue
 
-        # Пропуск некорректных интервалов и нулевой массы
+        d_low = float(r.d_low)
+        d_high = float(r.d_high)
+        m = float(r.mass)
+
+        # Пропуск некорректных интервалов и нулевой/отрицательной массы
+        if not np.isfinite(d_low) or not np.isfinite(d_high) or not np.isfinite(m):
+            continue
         if m <= 0.0:
             continue
-        if d_low <= 0.0 or d_high <= 0.0 or d_high <= d_low:
+        if d_low <= 0.0 or d_high <= d_low:
             continue
 
         # Репрезентативный диаметр интервала: геометрический центр
         d_bin = float(np.sqrt(d_low * d_high))
         dg_bins.append(d_bin)
-        w_bins.append(m / total_mass)
+        m_bins.append(m)
 
-    # Значения по умолчанию, если не удалось собрать интервалы
+    # Значения по умолчанию, если интервальные метрики посчитать нельзя
     log_mean = float("nan")
     mass_mean = float("nan")
     modal = float("nan")
 
     if dg_bins:
-        d_arr = np.array(dg_bins, dtype=float)
-        w_arr = np.array(w_bins, dtype=float)
+        d_arr = np.asarray(dg_bins, dtype=float)
+        m_arr = np.asarray(m_bins, dtype=float)
 
-        # Нормировка весов на случай численных отклонений
-        w_sum = float(np.sum(w_arr))
-        if w_sum > 0.0:
-            w_arr = w_arr / w_sum
+        m_sum = float(np.sum(m_arr))
+        if m_sum > 0.0:
+            # Массовые доли внутри выбранных бинов (ступени 7..0)
+            w_arr = m_arr / m_sum
 
-        # Логарифмический средний диаметр
-        log_mean = float(np.exp(np.sum(w_arr * np.log(d_arr))))
+            # Логарифмический средний диаметр
+            log_mean = float(np.exp(np.sum(w_arr * np.log(d_arr))))
 
-        # Среднемассовый диаметр
-        mass_mean = float(np.sum(w_arr * d_arr))
+            # Среднемассовый диаметр
+            mass_mean = float(np.sum(w_arr * d_arr))
 
-        # Модальный диаметр
-        modal = float(d_arr[int(np.argmax(w_arr))])
+            # Модальный диаметр
+            modal = float(d_arr[int(np.argmax(w_arr))])
 
     return MmadResult(
         mmad=float(mmad),
@@ -427,4 +627,86 @@ def compute_mmad(records: Iterable[StageRecord]) -> MmadResult:
         modal=float(modal),
         diam_um=diam,
         cum_undersize_pct=cum_pct,
+    )
+
+
+def compute_mmad_least_squares(records: Iterable[StageRecord]) -> MmadResultLS:
+
+    d_low = _as_float_array_optional([r.d_low for r in records])
+    d_high = _as_float_array_optional([r.d_high for r in records])
+    mass = _as_float_array_optional([r.mass for r in records])
+
+    # Репрезентативный диаметр ступени
+    # d_i = sqrt(d_low * d_high)
+    mask_intervals = (
+        np.isfinite(d_low)
+        & np.isfinite(d_high)
+        & (d_low > 0.0)
+        & (d_high > d_low)
+        & np.isfinite(mass)
+        & (mass >= 0.0)
+    )
+
+    if np.sum(mask_intervals) < 3:
+        raise ValueError("Недостаточно корректных интервалов (нужно >= 3).")
+
+    d_low = d_low[mask_intervals]
+    d_high = d_high[mask_intervals]
+    rec_list = list(records)
+
+    mass = np.asarray(
+        [rec_list[0].mass, *mass[mask_intervals], rec_list[9].mass, rec_list[10].mass],
+        dtype=float,
+    )
+
+    d_g = np.sqrt(d_low * d_high)
+    y_ln_d = np.log(d_g)
+
+    # Считаем p как долю накопленной массы
+    total_mass = np.sum(mass)
+    if total_mass <= 0.0:
+        raise ValueError("Суммарная масса (фильтр + ступени 7..0) должна быть > 0.")
+
+    cum_mass = np.cumsum(mass)
+    p = cum_mass / total_mass
+    # Исключаем из расчета фильтр и пресепаратор
+    p = p[1:9]
+
+    # arcerf(2p-1) = NORMSINV(p)/sqrt(2)
+    # исключаем p=0 и p=1
+    mask_p = (p > 0.0) & (p < 1.0)
+    if np.sum(mask_p) < 3:
+        raise ValueError("После исключения p=0 и p=1 осталось < 3 точек.")
+
+    y_ln_d = y_ln_d[mask_p]
+    p = p[mask_p]
+
+    x_erfinv = normal_ppf(p) / np.sqrt(2.0)
+
+    # LINEST
+    stats = computate_linest_with_stats(y=y_ln_d, x=x_erfinv)
+
+    d50 = float(np.exp(stats.intercept))
+    sigma = float(stats.slope / np.sqrt(2.0))  # σ логнормального распределения
+    kor_k = float(1 / stats.slope)
+    r = float(stats.r2**0.5)
+
+    return MmadResultLS(
+        mmad=d50,
+        kor_k=kor_k,
+        sigma=sigma,
+        r=r,
+        slope=stats.slope,
+        intercept=stats.intercept,
+        se_slope=stats.se_slope,
+        se_intercept=stats.se_intercept,
+        r2=stats.r2,
+        syx=stats.syx,
+        f_stat=stats.f_stat,
+        df=stats.df,
+        ss_reg=stats.ss_reg,
+        ss_res=stats.ss_res,
+        # добавление точек для построения графика
+        y_ln_d=y_ln_d,
+        x_erfinv=x_erfinv,
     )

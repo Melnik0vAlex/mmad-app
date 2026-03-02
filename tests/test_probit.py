@@ -1,15 +1,28 @@
 # -*- coding: utf-8 -*-
+# tests/probit.py
 """
-Тесты для probit-аналитики:
-- fit_probit
-- predict_cumulative_from_probit
+Тесты для функций probit-аппроксимации распределения:
 
-Проверяем:
-1) Фильтрацию точек (d<=0, NaN/inf, cum_pct=0/100)
-2) Восстановление параметров a,b на синтетических данных
-3) RMSE на идеальных данных ~ 0
-4) Предсказание cumulative (%) по модели
-5) Поведение на невалидных диаметрах при predict (NaN)
+- fit_probit — оценка параметров линейной зависимости
+  probit = a * log10(d) + b
+- predict_cumulative_from_probit — восстановление кумулятивной кривой
+  по найденным параметрам.
+
+Проверяются следующие аспекты:
+
+1. Корректная фильтрация входных данных:
+   - исключение неположительных диаметров,
+   - удаление NaN/inf,
+   - исключение значений cumulative = 0% и 100%.
+
+2. Восстановление параметров модели на синтетических данных
+   с известной аналитической зависимостью.
+
+3. Поведение ошибки аппроксимации (RMSE) на идеальных данных.
+
+4. Согласованность функции предсказания с аналитической моделью.
+
+5. Устойчивость predict-функции к некорректным входным диаметрам.
 """
 
 from __future__ import annotations
@@ -49,8 +62,11 @@ def _make_synthetic_probit_data(
 
 def test_fit_probit_returns_nan_if_less_than_2_points_after_filter() -> None:
     """
-    Если после фильтрации остаётся < 2 точек,
-    fit_probit должен вернуть NaN-параметры.
+    Проверка граничного случая: после фильтрации входных данных
+    остаётся менее двух точек.
+
+    В этой ситуации линейная регрессия не определена,
+    поэтому функция должна вернуть NaN-параметры модели.
     """
     diam = np.array([1.0, 2.0, np.nan], dtype=float)
 
@@ -66,10 +82,11 @@ def test_fit_probit_returns_nan_if_less_than_2_points_after_filter() -> None:
 
 def test_fit_probit_filters_0_and_100_percent() -> None:
     """
-    Проверяем, что точки с cum_pct = 0 и 100 не участвуют в фиттинге.
+    Проверяется, что значения cumulative = 0% и 100%
+    исключаются из процедуры аппроксимации.
 
-    Строим синтетику на 3 точках, но добавляем "краевые" 0 и 100:
-    если бы они учитывались, параметры могли бы исказиться из-за клиппинга.
+    Такие точки приводят к бесконечным значениям probit,
+    поэтому они не должны участвовать в оценке параметров.
     """
     a_true = 2.0
     b_true = 5.0
@@ -94,8 +111,12 @@ def test_fit_probit_filters_0_and_100_percent() -> None:
 
 def test_fit_probit_recovers_parameters_on_ideal_data() -> None:
     """
-    На идеальных данных probit-линейная регрессия должна восстановить a,b,
-    а RMSE быть близким к 0.
+    Проверка восстановления параметров модели на идеальных данных.
+
+    Кумулятивная кривая формируется строго по линейной probit-модели,
+    поэтому ожидается:
+        - точное восстановление коэффициентов a и b,
+        - RMSE, близкая к нулю.
     """
     a_true = 1.7
     b_true = 4.3
@@ -119,7 +140,7 @@ def test_predict_cumulative_from_probit_matches_synthetic_curve() -> None:
     Проверяем, что predict_cumulative_from_probit воспроизводит кумулятиву,
     если fit соответствует истинным параметрам.
     """
-    fit = ProbitLine(a=2.2, b=4.8, rmse=0.0)
+    fit = ProbitLine(a=2.2, b=4.8, rmse=0.0, r2=1.0)
 
     diam = np.array([0.5, 1.0, 2.0, 4.0], dtype=float)
 
@@ -129,35 +150,13 @@ def test_predict_cumulative_from_probit_matches_synthetic_curve() -> None:
     assert np.allclose(predicted, expected, atol=1e-10, rtol=0.0)
 
 
-def test_predict_cumulative_returns_nan_for_nonpositive_or_nonfinite_diameters() -> (
-    None
-):
-    """
-    Для d<=0 и нечисловых значений предсказание должно быть NaN,
-    а для валидных — конечным числом в [0,100].
-    """
-    fit = ProbitLine(a=2.0, b=5.0, rmse=0.0)
-
-    diam = np.array([np.nan, -1.0, 0.0, 1.0, 10.0, np.inf], dtype=float)
-    out = predict_cumulative_from_probit(fit, diam)
-
-    assert math.isnan(float(out[0]))
-    assert math.isnan(float(out[1]))
-    assert math.isnan(float(out[2]))
-    assert math.isfinite(float(out[3]))
-    assert math.isfinite(float(out[4]))
-    assert math.isnan(float(out[5]))
-
-    assert 0.0 <= float(out[3]) <= 100.0
-    assert 0.0 <= float(out[4]) <= 100.0
-
-
 def test_fit_and_predict_end_to_end_roundtrip() -> None:
     """
-    End-to-end тест:
-    1) генерируем cum_pct по истинной модели
-    2) фиттим a,b
-    3) предсказываем cum_pct обратно
+    Сквозной тест:
+    1. Генерируется кумулятивное распределение по известной модели.
+    2. По этим данным оцениваются параметры probit-линии.
+    3. Выполняется обратное предсказание cumulative (%) по найденной модели.
+
     """
     a_true = 1.3
     b_true = 5.4

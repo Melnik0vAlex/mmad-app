@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 import numpy as np
 
 
@@ -24,8 +25,8 @@ class StageRecord:
     """
 
     name: str
-    d_high: float
-    d_low: float
+    d_low: Optional[float]
+    d_high: Optional[float]
     mass: float
 
 
@@ -122,11 +123,137 @@ class ProbitLine:
         Наклон линии в координатах probit vs log10(d).
     b:
         Свободный член (смещение) в координатах probit vs log10(d).
-    rmse:
-        Среднеквадратичная ошибка аппроксимации (RMSE) в probit-единицах:
-            RMSE = sqrt(mean((probit_i - (a*log10(d_i) + b))^2)).
+    r2:
+        Коэффициент детерминации R^2.
     """
 
     a: float
     b: float
     rmse: float
+    r2: float
+
+
+@dataclass(frozen=True)
+class LinestStats:
+    """
+    Статистика линейной регрессии (аналог Excel ЛИНЕЙН с stats=TRUE).
+
+    Атрибуты
+    --------
+    slope:
+        Наклон m в модели y = a*x + b.
+    intercept:
+        Свободный член c в модели y = a*x + b.
+    se_slope:
+        Стандартная ошибка наклона.
+    se_intercept:
+        Стандартная ошибка свободного члена.
+    r2:
+        Коэффициент детерминации R^2.
+    syx:
+        Стандартная ошибка регрессии (SE_yx) = sqrt(SS_res / df).
+    f_stat:
+        F-статистика.
+    df:
+        Число степеней свободы (n - 2).
+    ss_reg:
+        Сумма квадратов регрессии.
+    ss_res:
+        Сумма квадратов остатков.
+    """
+
+    slope: float
+    intercept: float
+    se_slope: float
+    se_intercept: float
+    r2: float
+    syx: float
+    f_stat: float
+    df: int
+    ss_reg: float
+    ss_res: float
+
+
+@dataclass(frozen=True)
+class MmadResultLS:
+    """
+    Результат расчёта MMAD и дополнительные метрики.
+
+    Все диаметры выражены в микрометрах (мкм), массы — в микрограммах (мкг),
+    если не указано иначе.
+
+    Атрибуты
+    --------
+    mmad:
+        Медианный аэродинамический диаметр распределения:
+            mmad = D50 = exp(intercept).
+
+    kor_k:
+        «Корень K» — параметр ширины распределения, вычисляемый из sigma(ln):
+            K = exp(sigma); конкретная формула зависит
+
+    sigma:
+        sigma(ln) — стандартное отклонение распределения в координате ln(d).
+        В линейной модели соответствует наклону slope (m).
+
+    r:
+        Коэффициент корреляции Пирсона между x и y в линейной регрессии
+        (например, между arcerf(2p-1) и ln(d)), безразмерный.
+
+    slope:
+        m — наклон линейной регрессии в модели ln(d) = m*x + c,
+        где x = arcerf(2p-1). Обычно slope ≈ sigma(ln).
+
+    intercept:
+        c — свободный член регрессии. Обычно intercept = mu = ln(D50).
+
+    se_slope:
+        Стандартная ошибка оценки наклона slope (SE(m)).
+
+    se_intercept:
+        Стандартная ошибка оценки свободного члена intercept (SE(c)).
+
+    r2:
+        Коэффициент детерминации R² для линейной регрессии.
+
+    syx:
+        Стандартная ошибка регрессии (SE_yx, standard error of estimate),
+        т.е. оценка разброса остатков по оси y (ln(d)).
+
+    f_stat:
+        F-статистика значимости регрессии (обычно для проверки гипотезы
+        slope = 0) при заданных степенях свободы.
+
+    df:
+        Число степеней свободы для оценки дисперсии остатков.
+        Для простой линейной регрессии обычно df = n - 2.
+
+    ss_reg:
+        SS_reg — сумма квадратов, объяснённая регрессией (регрессионная).
+
+    ss_res:
+        SS_res — сумма квадратов остатков (необъяснённая регрессией).
+
+    y_ln_d:
+        логарифмы диаметров, необходимы для построения графика линеаризации ФЗП.
+
+    x_erfinv:
+        значения arcerf(2p-1), необходимы для построения графика линеаризации ФЗП.
+    """
+
+    mmad: float
+    kor_k: float
+    sigma: float
+    r: float
+    slope: float
+    intercept: float
+    se_slope: float
+    se_intercept: float
+    r2: float
+    syx: float
+    f_stat: float
+    df: int
+    ss_reg: float
+    ss_res: float
+    y_ln_d: np.ndarray
+    x_erfinv: np.ndarray

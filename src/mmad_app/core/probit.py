@@ -58,7 +58,7 @@ def fit_probit(diam: np.ndarray, cum_pct: np.ndarray) -> ProbitLine:
     y_pct = y_pct[mask]
 
     if x.size < 2:
-        return ProbitLine(a=float("nan"), b=float("nan"), rmse=float("nan"))
+        return ProbitLine(a=float("nan"), b=float("nan"), rmse=float("nan"), r2=float("nan"))
 
     # Перевод проценты в долю (0..1)
     p = clip_prob(y_pct / 100.0)
@@ -76,9 +76,16 @@ def fit_probit(diam: np.ndarray, cum_pct: np.ndarray) -> ProbitLine:
     # RMSE для качества подгонки
     probit_hat = a * lx + b
 
+    # RMSE
     rmse = float(np.sqrt(np.mean((probit - probit_hat) ** 2)))
 
-    return ProbitLine(a=float(a), b=float(b), rmse=float(rmse))
+    # R²
+    ss_res = float(np.sum((probit - probit_hat) ** 2))
+    ss_tot = float(np.sum((probit - np.mean(probit)) ** 2))
+
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 1.0
+
+    return ProbitLine(a=float(a), b=float(b), rmse=float(rmse), r2=float(r2))
 
 
 def predict_cumulative_from_probit(

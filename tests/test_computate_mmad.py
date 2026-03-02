@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
+# test/test_computate_mmad.py
 """
-Тесты для compute_mmad.
+Тесты для `compute_mmad`.
 
-Проверяем:
-1) Базовую корректность результата на данных Andersen:
-   - значения конечны и > 0 где должны быть
-   - квантили возрастают
-   - gsd > 1
-   - fpf_pct в диапазоне 0..100
-2) Ошибки:
-   - суммарная масса <= 0
-3) Интервальные метрики:
-   - log_mean, mass_mean, modal конечны и > 0 при наличии корректных интервалов.
+Здесь мы проверяем поведение расчёта на небольших, полностью контролируемых наборах:
+
+- «Здравый смысл» результата на типичном наборе ступеней (порядок квантилей,
+  конечность значений, разумные диапазоны).
+- Корректную обработку ошибок (например, нулевая суммарная масса).
+- Интервальные метрики (log_mean / mass_mean / modal):
+  * считаются и конечны, если интервалы заданы корректно,
+  * становятся NaN, если интервалы не позволяют корректно вычислить эти величины.
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ from mmad_app.core.models import StageRecord
 
 
 def _make_andersen_records() -> list[StageRecord]:
-    """Тестовый набор Andersen (массы положительные)."""
+    """Возвращает компактный тестовый набор ступеней Andersen (массы > 0)."""
     return [
         StageRecord(name="0", d_low=9.0, d_high=10.0, mass=0.10),
         StageRecord(name="1", d_low=5.8, d_high=9.0, mass=0.15),
@@ -41,27 +40,31 @@ def _make_andersen_records() -> list[StageRecord]:
 
 def test_compute_mmad_basic_sanity() -> None:
     """
-    Интеграционный sanity-тест:
-    - метрики конечны
-    - физически разумные отношения квантилей
+    Базовая проверка корректности результата на «типичных» данных.
+
+    Не тестируем точные числа (они зависят от деталей интерполяции/округления),
+    а проверяем свойства, которые должны выполняться всегда.
     """
     records = _make_andersen_records()
     res = compute_mmad(records)
 
+    # Суммарная масса и ключевые метрики должны быть положительными.
     assert res.total_mass > 0.0
     assert res.mmad > 0.0
+
+    # Для реального аэрозоля ожидаем GSD > 1.
     assert res.gsd > 1.0
 
-    # Возрастание квантилей
+    # Квантили должны идти строго по возрастанию.
     assert res.d10 < res.d16 < res.mmad < res.d84 < res.d90
 
-    # Span неотрицателен
+    # Span по определению не должен быть отрицательным.
     assert res.span >= 0.0
 
-    # FPF в процентах
+    # FPF — это доля, выраженная в процентах.
     assert 0.0 <= res.fpf_pct <= 100.0
 
-    # Кумулятива и diam возвращаются
+    # Для построения графиков возвращаются согласованные массивы.
     assert isinstance(res.diam_um, np.ndarray)
     assert isinstance(res.cum_undersize_pct, np.ndarray)
     assert res.diam_um.shape == res.cum_undersize_pct.shape
@@ -70,7 +73,8 @@ def test_compute_mmad_basic_sanity() -> None:
 
 def test_compute_mmad_interval_means_and_mode_are_finite() -> None:
     """
-    Проверяем, что интервальные метрики считаются и конечны.
+    Если у записей заданы корректные интервалы (d_low < d_high),
+    интервальные метрики должны быть вычислены и быть конечными числами.
     """
     records = _make_andersen_records()
     res = compute_mmad(records)
@@ -86,8 +90,10 @@ def test_compute_mmad_interval_means_and_mode_are_finite() -> None:
 
 def test_compute_mmad_raises_if_total_mass_non_positive() -> None:
     """
-    Если суммарная масса <= 0 -> ошибка.
-    Важно: нужно минимум 3 ступени, иначе ошибка на _validate_records.
+    Нулевая (или отрицательная) суммарная масса — это некорректные входные данные.
+
+    Важно: оставляем минимум 3 записи, чтобы ошибка была именно по массе, а не
+    из-за валидации «слишком мало ступеней».
     """
     records = [
         StageRecord(name="0", d_low=9.0, d_high=10.0, mass=0.0),
@@ -101,15 +107,16 @@ def test_compute_mmad_raises_if_total_mass_non_positive() -> None:
 
 def test_compute_mmad_interval_metrics_nan_if_no_valid_bins() -> None:
     """
-    Если интервальные метрики невозможно посчитать (например, все массы 0 кроме одной,
-    или интервалы некорректны), то log_mean/mass_mean/modal должны остаться NaN.
+    Если интервальные метрики посчитать нельзя (нет валидных интервалов),
+    функция должна вернуть NaN для log_mean / mass_mean / modal.
 
-    Здесь делаем: масса есть, но интервалы сломаны (d_high <= d_low) -> bins пустые.
+    Здесь у всех записей отсутствует d_low, поэтому ни один корректный интервал
+    для расчёта репрезентативного диаметра не формируется.
     """
     records = [
-        StageRecord(name="0", d_low=1.0, d_high=1.0, mass=1.0),  # некорректный интервал
-        StageRecord(name="1", d_low=2.0, d_high=2.0, mass=1.0),  # некорректный интервал
-        StageRecord(name="2", d_low=3.0, d_high=3.0, mass=1.0),  # некорректный интервал
+        StageRecord(name="Ступень 1", d_low=None, d_high=1.0, mass=1.0),
+        StageRecord(name="Ступень 2", d_low=None, d_high=3.0, mass=2.0),
+        StageRecord(name="Ступень 3", d_low=None, d_high=10.0, mass=3.0),
     ]
 
     res = compute_mmad(records)
