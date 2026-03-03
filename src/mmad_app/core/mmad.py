@@ -62,128 +62,138 @@ def compute_cumulative_undersize(
     records: Iterable[StageRecord],
     *,
     include_unclassified_in_total: bool = False,
+    include_oversize_in_total: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Формирует накопительную кривую F(d) = cumulative undersize (%),
-    включая фракции < 0.43 мкм (фильтр) и > 10 мкм (пресепаратор).
+    Строит cumulative undersize F(d), % по cut-point'ам (d_low) ступеней.
 
-    Математически:
-        F(d) = 100 * (Σ m_i, где D_i <= d) / (Σ m_total)
+    Узлы кривой:
+    - для ступеней (d_low, d_high] используем d = d_low (cut-point, D50);
+    - для фильтра (0, d_high] используем d = d_high;
+    - пресепаратор (d_low, +inf) узла на конечном d не даёт, но может входить
+      в знаменатель (include_oversize_in_total=True).
 
-    Здесь мы трактуем элементы так:
-    - если задан d_high (и d_low=None) -> "нижняя" фракция (фильтр): (0, d_high]
-    - если заданы d_low и d_high -> "интервал" ступени: (d_low, d_high]
-    - если задан d_low (и d_high=None) -> "верхняя" фракция (пресепаратор): (d_low, +∞)
-    - если обе границы None -> неклассифицированная масса (входной канал/потери)
+    Определение:
+        F(d_k) = 100 * (M_{<= d_k}) / M_total
 
-    Параметры
-    ---------
-    records:
-        Итератор записей.
-    include_unclassified_in_total:
-        Если True, масса записей без границ (None/None) включается в знаменатель.
-        По умолчанию False (иначе кумулятива “сожмётся” без привязки к диаметрам).
+    где M_{<= d_k} — масса частиц, относимых к фракциям "мельче либо равных d_k":
+    - фильтр всегда входит в undersize для любого d_k >= d_filter;
+    - ступени, у которых cut-point <= d_k, считаются "мельче" (они лежат ниже по тракту).
 
-    Возвращает
-    ----------
-    (diam_um, cum_undersize_pct)
-        diam_um: диаметры (мкм) строго > 0
-        cum_undersize_pct: F(d), % (монотонно неубывающая)
+    Важно:
+    Эта реализация соответствует практической интерпретации Excel-таблиц, где
+    по оси X используют D50 (нижнюю границу) ступеней.
     """
     res_list = list(records)
-    _validate_records(res_list)
+    if len(res_list) < 2:
+        raise ValueError("Недостаточно записей для построения кумулятивы (нужно >= 2).")
 
-    # 1) Разделяем записи
-    bins_upper: List[float] = []  # верхняя граница бина (для суммирования “<= d”)
-    bins_mass: List[float] = []
+    # Массы групп
+    filter_mass = 0.0
     unclassified_mass = 0.0
+    oversize_mass = 0.0
+
+    # Данные ступеней: cut-point (d_low) и масса
+    cutpoints: List[float] = []
+    stage_mass: List[float] = []
+
+    # Отдельно сохраним d_filter = d_high фильтра (для узла на графике)
+    d_filter: Optional[float] = None
 
     for r in res_list:
         m = float(r.mass)
+        if not np.isfinite(m):
+            raise ValueError("Обнаружены нечисловые (NaN/inf) значения массы.")
         if m <= 0.0:
             continue
 
         if r.d_low is None and r.d_high is None:
-            # Входной канал / потери: нет связи с диаметром
+            # Входной канал / потери
             unclassified_mass += m
             continue
 
         if r.d_low is None and r.d_high is not None:
             # Фильтр: (0, d_high]
-            upper = float(r.d_high)
-            if upper > 0.0 and np.isfinite(upper):
-                bins_upper.append(upper)
-                bins_mass.append(m)
-            continue
-
-        if r.d_low is not None and r.d_high is not None:
-            # Ступень: (d_low, d_high]
-            low = float(r.d_low)
-            high = float(r.d_high)
-            if (low > 0.0) and np.isfinite(low) and np.isfinite(high) and (high > low):
-                bins_upper.append(high)
-                bins_mass.append(m)
+            d_filter = float(r.d_high)
+            if not (np.isfinite(d_filter) and d_filter > 0.0):
+                continue
+            filter_mass += m
             continue
 
         if r.d_low is not None and r.d_high is None:
             # Пресепаратор: (d_low, +inf)
-            # Для cumulative undersize по определению эта масса НЕ входит в F(d)
-            # при d <= d_low. Чтобы довести кривую до 100%, добавим точку d_max.
-            # Сохраним upper = +inf как маркер.
-            bins_upper.append(float("inf"))
-            bins_mass.append(m)
+            oversize_mass += m
             continue
 
-    if len(bins_mass) < 2:
-        raise ValueError("Недостаточно интервалов/фракций для построения кумулятивы.")
+        if r.d_low is not None and r.d_high is not None:
+            # Ступень: (d_low, d_high] -> узел по d_low (cut-point)
+            low = float(r.d_low)
+            high = float(r.d_high)
+            if not (np.isfinite(low) and np.isfinite(high)):
+                continue
+            if low <= 0.0 or high <= low:
+                continue
+            cutpoints.append(low)
+            stage_mass.append(m)
+            continue
 
-    bins_upper_arr = np.asarray(bins_upper, dtype=float)
-    bins_mass_arr = np.asarray(bins_mass, dtype=float)
+    if len(stage_mass) < 2 and filter_mass <= 0.0:
+        raise ValueError(
+            "Недостаточно данных для кумулятивы (нужно >=2 ступени или фильтр)."
+        )
 
-    # 2) Знаменатель (total mass)
-    total_mass = float(np.sum(bins_mass_arr))
+    # Знаменатель (что считаем "общей массой аэрозоля")
+    total_mass = float(filter_mass + np.sum(stage_mass))
+    if include_oversize_in_total:
+        total_mass += float(oversize_mass)
     if include_unclassified_in_total:
         total_mass += float(unclassified_mass)
 
-    if total_mass <= 0.0:
-        raise ValueError("Суммарная масса должна быть > 0.")
+    if total_mass <= 0.0 or not np.isfinite(total_mass):
+        raise ValueError("Суммарная масса должна быть > 0 и конечной.")
 
-    # 3) Формируем узлы кривой по всем конечным верхним границам
-    finite_uppers = bins_upper_arr[np.isfinite(bins_upper_arr)]
-    finite_uppers = finite_uppers[finite_uppers > 0.0]
+    # Узлы по диаметру: фильтр (если есть) + уникальные cut-point'ы ступеней
+    diam_nodes: List[float] = []
+    if d_filter is not None and np.isfinite(d_filter) and d_filter > 0.0:
+        diam_nodes.append(float(d_filter))
 
-    if finite_uppers.size == 0:
+    if cutpoints:
+        diam_nodes.extend([float(x) for x in cutpoints])
+
+    # Уникальные и отсортированные узлы
+    diam_arr = np.unique(np.asarray(diam_nodes, dtype=float))
+    diam_arr = diam_arr[np.isfinite(diam_arr) & (diam_arr > 0.0)]
+    if diam_arr.size == 0:
         raise ValueError(
             "Нет ни одной конечной границы диаметра для построения кривой."
         )
 
-    unique_d = np.unique(np.sort(finite_uppers))
+    diam_arr = np.sort(diam_arr)
 
-    # Добавим “нижнюю” стартовую точку (чтобы были < min_d)
-    min_d = float(unique_d[0])
-    d_min = max(min_d / 1_000.0, 1e-6)  # строго > 0 для лог-интерполяций
+    # Для вычисления M_{<= d} нужно понимать "какие ступени мельче d":
+    # если используем d_low как cut-point, то "мельче" считаем те ступени,
+    # у которых d_low <= d (они ниже по тракту).
+    cp = np.asarray(cutpoints, dtype=float) if cutpoints else np.array([], dtype=float)
+    sm = (
+        np.asarray(stage_mass, dtype=float) if stage_mass else np.array([], dtype=float)
+    )
 
-    # Добавим “верхнюю” точку d_max, чтобы F(d_max)=100%
-    max_d = float(unique_d[-1])
-    d_max = max(max_d * 1.5, max_d + 1.0)
+    cum_values: List[float] = []
+    for d in diam_arr:
+        m_undersize = 0.0
 
-    diam_points = np.concatenate(([d_min], unique_d, [d_max])).astype(float)
+        # Включаем фильтр только когда d >= d_filter (иначе точка "левее" фильтра бессмысленна)
+        if d_filter is not None and d >= float(d_filter):
+            m_undersize += float(filter_mass)
 
-    # 4) Кумулятива: F(d) = sum(mass where upper <= d)/total*100,
-    # а пресепаратор (upper=inf) добавит скачок только на d_max (через 100%).
-    cum_points: List[float] = [0.0]
+        if cp.size > 0:
+            # Считаем ступени с cut-point <= d как "мелкие"
+            m_undersize += float(np.sum(sm[cp <= d]))
 
-    for d in unique_d:
-        frac = float(np.sum(bins_mass_arr[bins_upper_arr <= d])) / total_mass
-        cum_points.append(100.0 * frac)
+        cum_values.append(100.0 * m_undersize / total_mass)
 
-    cum_points.append(100.0)
-    cum_arr = np.asarray(cum_points, dtype=float)
-
-    # 5) Гарантируем монотонность
-    cum_arr = np.maximum.accumulate(cum_arr)
-
-    return diam_points, cum_arr
+    cum_arr = np.maximum.accumulate(np.asarray(cum_values, dtype=float))
+    return diam_arr, cum_arr
 
 
 def interpolate_d_at_cum_pct_logx(
@@ -607,7 +617,7 @@ def compute_mmad(records: Iterable[StageRecord]) -> MmadResult:
             mass_mean = float(np.sum(w_arr * d_arr))
 
             # Модальный диаметр
-            modal = float(d_arr[int(np.argmax(w_arr))])
+            modal = float(np.exp(np.log(mmad)-np.log(gsd)**2))
 
     return MmadResult(
         mmad=float(mmad),

@@ -90,10 +90,8 @@ def test_compute_mmad_interval_means_and_mode_are_finite() -> None:
 
 def test_compute_mmad_raises_if_total_mass_non_positive() -> None:
     """
-    Нулевая (или отрицательная) суммарная масса — это некорректные входные данные.
-
-    Важно: оставляем минимум 3 записи, чтобы ошибка была именно по массе, а не
-    из-за валидации «слишком мало ступеней».
+    При нулевых массах полезных точек для построения кумулятивы не остаётся,
+    поэтому compute_mmad падает с ошибкой о недостаточности данных.
     """
     records = [
         StageRecord(name="0", d_low=9.0, d_high=10.0, mass=0.0),
@@ -101,26 +99,20 @@ def test_compute_mmad_raises_if_total_mass_non_positive() -> None:
         StageRecord(name="2", d_low=4.7, d_high=5.8, mass=0.0),
     ]
 
-    with pytest.raises(ValueError, match=r"Суммарная масса должна быть > 0"):
+    with pytest.raises(ValueError, match=r"Недостаточно данных для кумулятивы"):
         _ = compute_mmad(records)
 
 
 def test_compute_mmad_interval_metrics_nan_if_no_valid_bins() -> None:
     """
-    Если интервальные метрики посчитать нельзя (нет валидных интервалов),
-    функция должна вернуть NaN для log_mean / mass_mean / modal.
-
-    Здесь у всех записей отсутствует d_low, поэтому ни один корректный интервал
-    для расчёта репрезентативного диаметра не формируется.
+    Если данные не позволяют построить корректную кривую для извлечения квантилей,
+    compute_mmad должен завершаться с ValueError.
     """
     records = [
-        StageRecord(name="Ступень 1", d_low=None, d_high=1.0, mass=1.0),
-        StageRecord(name="Ступень 2", d_low=None, d_high=3.0, mass=2.0),
-        StageRecord(name="Ступень 3", d_low=None, d_high=10.0, mass=3.0),
+        StageRecord(name="Фильтр-1", d_low=None, d_high=1.0, mass=1.0),
+        StageRecord(name="Фильтр-2", d_low=None, d_high=3.0, mass=2.0),
+        StageRecord(name="Фильтр-3", d_low=None, d_high=10.0, mass=3.0),
     ]
 
-    res = compute_mmad(records)
-
-    assert math.isnan(res.log_mean)
-    assert math.isnan(res.mass_mean)
-    assert math.isnan(res.modal)
+    with pytest.raises(ValueError, match=r"Недостаточно точек"):
+        _ = compute_mmad(records)

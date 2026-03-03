@@ -169,7 +169,7 @@ class MainWindow(QMainWindow):
         right_layout.addLayout(layout_result)
 
         self.panel_method_lp = ResultsPanel(
-            title="Модель: Лог-пробит",
+            title="Интерполяция интегральной функции распределения",
             rows=(
                 ("mmad", "MMAD, мкм"),
                 ("log_mean", "LMD, мкм"),
@@ -186,7 +186,7 @@ class MainWindow(QMainWindow):
         )
 
         self.panel_method_ls = ResultsPanel(
-            title="Модель: ln(d) = a * arcerf(2p-1) + b",
+            title="Линеаризация лог-нормального распределения",
             rows=(
                 ("mmad", "d50, мкм"),
                 ("kor_k", "Корень K"),

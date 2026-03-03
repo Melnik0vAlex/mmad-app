@@ -83,10 +83,8 @@ def test_order_invariance() -> None:
 
 def test_raises_if_total_mass_non_positive() -> None:
     """
-    Если суммарная масса равна 0 (или отрицательная), кумулятиву построить нельзя.
-
-    Важно: оставляем минимум 3 записи, чтобы ошибка была именно про массу,
-    а не про «слишком мало ступеней».
+    Если входные массы нулевые, после фильтрации (m<=0) данных не остаётся,
+    поэтому ожидаем ошибку о недостаточности данных для кумулятивы.
     """
     records = [
         StageRecord("0", 9.0, 10.0, 0.0),
@@ -94,7 +92,7 @@ def test_raises_if_total_mass_non_positive() -> None:
         StageRecord("2", 4.7, 5.8, 0.0),
     ]
 
-    with pytest.raises(ValueError, match=r"Суммарная масса должна быть > 0"):
+    with pytest.raises(ValueError, match=r"Недостаточно данных для кумулятивы"):
         _ = compute_cumulative_undersize(records)
 
 

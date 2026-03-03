@@ -166,11 +166,11 @@ class PlotWidget(QWidget):
             markeredgecolor="black",
             markeredgewidth=0.8,
             linewidth=1.6,
-            label="Накопительная кривая",
+            label="Интегральная кривая",
         )
 
         ax.set_title(
-            "Накопительная кривая массового распределения "
+            "Интегральная функция распределения "
             "по аэродинамическому диаметру",
             wrap=True,
         )
@@ -348,7 +348,7 @@ class PlotWidget(QWidget):
             linestyle="--",
             color="tab:blue",
             label=(
-                "Линейная аппроксимация\n" f"RMSE = {fit.rmse:.3f},  R² = {fit.r2:.4f}"
+                "Линейная аппроксимация\n" f"RMSE = {fit.rmse:.2f},  R² = {fit.r2:.2f}"
             ),
         )
 
